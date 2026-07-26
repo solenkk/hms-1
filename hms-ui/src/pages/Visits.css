@@ -1,0 +1,31 @@
+.patient-dropdown {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  overflow: hidden;
+  margin-top: 0.25rem;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.patient-option {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.9rem;
+  cursor: pointer;
+  transition: var(--transition);
+  font-size: 0.88rem;
+}
+.patient-option:hover { background: var(--bg-hover); }
+.selected-patient {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  background: hsla(162,72%,45%,0.1);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  font-size: 0.85rem;
+  color: var(--color-accent);
+  margin-top: 0.25rem;
+}

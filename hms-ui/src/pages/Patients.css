@@ -1,0 +1,3 @@
+.patient-name { display: flex; align-items: center; gap: 0.65rem; }
+.avatar-sm { width: 30px; height: 30px; font-size: 0.68rem; border-radius: 50%; background: linear-gradient(135deg, var(--color-primary-dark), var(--color-primary)); display: flex; align-items:center; justify-content:center; color:#fff; font-weight:700; flex-shrink:0; }
+.patient-num { color: var(--color-primary-light); }
