@@ -16,9 +16,18 @@ export default function Patients() {
     setLoading(true)
     try {
       const params = {}
-      if (search) {
-        if (search.match(/^\+?\d/)) params.phone = search
-        else params.name = search
+      if (search.trim()) {
+        const s = search.trim()
+        // Patient number format e.g. P-0001 or P0001
+        if (/^P[-]?\d+$/i.test(s)) {
+          params.patient_number = s
+        } else if (/^\+?\d{7,}$/.test(s)) {
+          // Pure digit string long enough to be a phone number
+          params.phone = s
+        } else {
+          // General text: search by name OR phone via the `query` param
+          params.query = s
+        }
       }
       const res = await patientsApi.list(params)
       setPatients(res.data.items ?? res.data)

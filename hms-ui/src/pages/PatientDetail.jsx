@@ -1147,11 +1147,25 @@ function PatientPrescriptions({ patientId, patient }) {
       .finally(() => setLoading(false))
   }
 
-  const cancelRx = async (rxId) => {
-    if (!window.confirm('Are you sure you want to cancel this prescription?')) return
+  // A doctor may cancel their own mistake up until the patient pays.
+  // After payment the money is already in the till, so only an admin can cancel.
+  const isAdmin = myRole === 'admin'
+  const canCancelRx = (p) => {
+    if (['cancelled', 'dispensed'].includes(p.status)) return false
+    if (p.status === 'pending_payment') return canOrder      // doctor or admin — not paid yet
+    return isAdmin                                            // paid already — admin only
+  }
+
+  const cancelRx = async (p) => {
+    const paid = p.status !== 'pending_payment'
+    const warning = paid
+      ? 'This prescription has already been PAID for. Cancelling it leaves the invoice standing so a refund can be issued.\n\n'
+      : ''
+    const reason = window.prompt(`${warning}Why are you cancelling this prescription?`, '')
+    if (reason === null) return   // dismissed
     try {
-      await pharmacyApi.cancelPrescription(rxId)
-      toast.success('Prescription cancelled')
+      await pharmacyApi.cancelPrescription(p.id, reason.trim() || undefined)
+      toast.success(paid ? 'Prescription cancelled — refund due to patient' : 'Prescription cancelled')
       load()
     } catch (err) {
       toast.error(apiError(err, 'Failed to cancel prescription'))
@@ -1193,9 +1207,11 @@ function PatientPrescriptions({ patientId, patient }) {
 
   const statusBadge = (s) => {
     const map = {
+      pending_payment: 'badge-gray',
       pending: 'badge-orange',
       dispensed: 'badge-green',
       partially_dispensed: 'badge-purple',
+      cancelled: 'badge-red',
     }
     return <span className={`badge ${map[s] || 'badge-gray'}`}>{s?.replace(/_/g, ' ')}</span>
   }
@@ -1349,14 +1365,24 @@ function PatientPrescriptions({ patientId, patient }) {
                           >
                             <Printer size={11} /> Print Rx
                           </button>
-                          {canOrder && ['pending_payment', 'pending'].includes(p.status) && (
+                          {canCancelRx(p) && (
                             <button
                               className="btn btn-ghost btn-xs"
                               style={{ color: 'var(--color-danger)', borderColor: 'var(--color-danger)', fontSize: '0.75rem' }}
-                              onClick={e => { e.stopPropagation(); cancelRx(p.id) }}
+                              onClick={e => { e.stopPropagation(); cancelRx(p) }}
+                              title={p.status === 'pending_payment'
+                                ? 'Cancel this prescription — the patient has not paid yet'
+                                : 'Patient already paid — cancelling leaves the invoice for a refund'}
                             >
                               Cancel Rx
                             </button>
+                          )}
+                          {!canCancelRx(p) && canOrder && !isAdmin
+                            && !['cancelled', 'dispensed'].includes(p.status) && (
+                            <span style={{ fontSize: '0.72rem', color: 'var(--text-muted)', alignSelf: 'center' }}
+                                  title="The patient has already paid — ask an administrator to cancel it">
+                              Paid — admin only
+                            </span>
                           )}
                         </div>
                       </td>
@@ -1414,7 +1440,9 @@ function PatientPrescriptions({ patientId, patient }) {
                                     )}
                                   </td>
                                   <td onClick={e => e.stopPropagation()} style={{minWidth: item.drug_form?.toLowerCase() === 'injection' ? '250px' : '160px'}}>
-                                    {item.drug_form?.toLowerCase() === 'injection' ? (
+                                    {p.status === 'cancelled' ? (
+                                      <span className="badge badge-red" style={{fontSize:'0.73rem'}}>Cancelled — do not dispense</span>
+                                    ) : item.drug_form?.toLowerCase() === 'injection' ? (
                                       <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.2rem 0' }}>
                                         {/* Completed logs */}
                                         {item.injection_logs && item.injection_logs.map(log => (

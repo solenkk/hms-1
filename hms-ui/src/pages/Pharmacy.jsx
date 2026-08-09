@@ -289,6 +289,7 @@ export default function Pharmacy() {
                 <option value="pending">Pending</option>
                 <option value="partially_dispensed">Partially Dispensed</option>
                 <option value="dispensed">Dispensed</option>
+                <option value="cancelled">Cancelled</option>
               </select>
             </div>
             <button className="btn btn-ghost" onClick={loadPrescriptions}>Refresh Queue</button>
@@ -337,7 +338,10 @@ export default function Pharmacy() {
                           </td>
                           <td>
                             <span className={`badge ${
-                              p.status === 'dispensed' ? 'badge-green' : p.status === 'partially_dispensed' ? 'badge-purple' : 'badge-orange'
+                              p.status === 'dispensed' ? 'badge-green'
+                                : p.status === 'partially_dispensed' ? 'badge-purple'
+                                : p.status === 'cancelled' ? 'badge-red'
+                                : 'badge-orange'
                             }`}>{p.status?.replace(/_/g, ' ')}</span>
                           </td>
                           <td style={{fontSize:'0.82rem', maxWidth:'180px', overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap'}}>
@@ -402,7 +406,9 @@ export default function Pharmacy() {
                                           )}
                                         </td>
                                         <td onClick={e => e.stopPropagation()} style={{ minWidth: item.drug_form?.toLowerCase() === 'injection' ? '250px' : '160px' }}>
-                                          {item.drug_form?.toLowerCase() === 'injection' ? (
+                                          {p.status === 'cancelled' ? (
+                                            <span className="badge badge-red" style={{ fontSize: '0.73rem' }}>Cancelled — do not dispense</span>
+                                          ) : item.drug_form?.toLowerCase() === 'injection' ? (
                                             <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem', padding: '0.2rem 0' }}>
                                               {/* Completed logs */}
                                               {item.injection_logs && item.injection_logs.map(log => (

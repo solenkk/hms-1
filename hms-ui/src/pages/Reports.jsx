@@ -14,37 +14,93 @@ export default function Reports() {
   const role = user?.role || ''
   const [tab, setTab]           = useState('dashboard')
   const [period, setPeriod]     = useState('month')
-  const [data, setData]         = useState(null)
+  const [dashData, setDashData] = useState(null)
+  const [visitsData, setVisitsData] = useState(null)
+  const [revenueData, setRevenueData] = useState(null)
   const [diagnoses, setDiagnoses] = useState([])
   const [stock, setStock]       = useState([])
   const [loading, setLoading]   = useState(true)
 
   useEffect(() => {
     setLoading(true)
-    // Fetch each API independently so one 403 doesn't break everything
-    const dashPromise = reportsApi.dashboard().then(r => r.data).catch(() => null)
+    
+    // Fetch general dashboard statistics (accessible by clinical roles)
+    const dashPromise = reportsApi.dashboard()
+      .then(r => r.data)
+      .catch(() => null)
+      
+    // Fetch visits report (accessible by admin, doctor, receptionist)
+    const visitsPromise = ['admin', 'doctor', 'receptionist'].includes(role)
+      ? reportsApi.visits(period).then(r => r.data).catch(() => null)
+      : Promise.resolve(null)
+
+    // Fetch revenue report (accessible by admin, cashier, receptionist)
+    const revenuePromise = ['admin', 'cashier', 'receptionist'].includes(role)
+      ? reportsApi.revenue(period).then(r => r.data).catch(() => null)
+      : Promise.resolve(null)
+
+    // Fetch diagnoses report (accessible by admin, doctor)
     const diagPromise = ['admin','doctor'].includes(role)
       ? reportsApi.diagnoses().then(r => r.data).catch(() => [])
       : Promise.resolve([])
+
+    // Fetch drug stock report (accessible by admin, pharmacist)
     const stockPromise = ['admin','pharmacist'].includes(role)
       ? reportsApi.drugStock().then(r => r.data?.slice(0, 10)).catch(() => [])
       : Promise.resolve([])
 
-    Promise.all([dashPromise, diagPromise, stockPromise]).then(([d, diag, stk]) => {
-      setData(d)
-      setDiagnoses(diag || [])
-      setStock(stk || [])
-    }).finally(() => setLoading(false))
-  }, [role])
+    Promise.all([dashPromise, visitsPromise, revenuePromise, diagPromise, stockPromise])
+      .then(([dash, visits, rev, diag, stk]) => {
+        setDashData(dash)
+        setVisitsData(visits)
+        setRevenueData(rev)
+        setDiagnoses(diag || [])
+        setStock(stk || [])
+      })
+      .finally(() => setLoading(false))
+  }, [role, period])
 
   if (loading) return <div className="page-body"><div className="loading-center"><div className="spinner" /></div></div>
 
-  const visits = data?.visits || {}
-  const visitTypeData = Object.entries({
-    OPD: visits.total_opd ?? 0,
-    IPD: visits.total_ipd ?? 0,
-    Emergency: visits.total_emergency ?? 0,
-  }).map(([name, value]) => ({ name, value }))
+  // Calculate visit type distribution from visits report breakdown
+  const breakdown = visitsData?.breakdown || {}
+  const getTypeCount = (typeKey) => {
+    const typeData = breakdown[typeKey] || breakdown[typeKey.toLowerCase()] || breakdown[typeKey.toUpperCase()] || {}
+    return Object.values(typeData).reduce((sum, count) => sum + count, 0)
+  }
+
+  const visitTypeData = [
+    { name: 'OPD', value: getTypeCount('opd') },
+    { name: 'IPD', value: getTypeCount('ipd') },
+    { name: 'Emergency', value: getTypeCount('emergency') }
+  ]
+
+  // Calculate summary stats
+  const totalVisits = visitsData?.total ?? 0
+  const getStatusCount = (statusKey) => {
+    let sum = 0
+    Object.values(breakdown).forEach(typeData => {
+      sum += typeData[statusKey] || typeData[statusKey.toLowerCase()] || typeData[statusKey.toUpperCase()] || 0
+    })
+    return sum
+  }
+  const openVisits = getStatusCount('open')
+  const closedVisits = getStatusCount('closed')
+
+  // Calculate total revenue for the selected period
+  const totalRevenue = revenueData?.by_payment_method?.reduce((sum, item) => sum + (item.total_etb || 0), 0) ?? 0
+
+  // Standardize diagnoses keys (backend returns 'icd10_code' and 'frequency')
+  const mappedDiagnoses = diagnoses.map(d => ({
+    diagnosis_code: d.diagnosis_code || d.icd10_code || '',
+    count: d.count ?? d.frequency ?? 0
+  }))
+
+  // Standardize stock keys (backend returns 'name' and 'current_stock')
+  const mappedStock = stock.map(s => ({
+    ...s,
+    name_generic_en: s.name_generic_en || s.name || ''
+  }))
 
   const tabs = [
     { key: 'dashboard', label: 'Dashboard', show: true },
@@ -93,15 +149,15 @@ export default function Reports() {
           <div className="card">
             <div className="card-header"><h3>Summary Stats</h3></div>
             <div className="report-stat-list">
-              <ReportStat label="Total Visits" value={visits.total ?? 0} />
-              <ReportStat label="Open Visits" value={visits.open ?? 0} color="var(--color-accent)" />
-              <ReportStat label="Closed Visits" value={visits.closed ?? 0} />
+              <ReportStat label="Total Visits" value={totalVisits} />
+              <ReportStat label="Open Visits" value={openVisits} color="var(--color-accent)" />
+              <ReportStat label="Closed Visits" value={closedVisits} />
               {['admin','cashier','receptionist'].includes(role) && (
-                <ReportStat label="Revenue (ETB)" value={(data?.revenue_etb ?? 0).toLocaleString()} color="var(--color-warning)" />
+                <ReportStat label="Revenue (ETB)" value={totalRevenue.toLocaleString()} color="var(--color-warning)" />
               )}
-              <ReportStat label="Pending Labs" value={data?.alerts?.pending_lab_orders ?? 0} color="hsl(270,65%,58%)" />
-              <ReportStat label="Beds Total" value={data?.beds?.total ?? 0} />
-              <ReportStat label="Beds Occupied" value={data?.beds?.occupied ?? 0} color="var(--color-danger)" />
+              <ReportStat label="Pending Labs" value={dashData?.alerts?.pending_lab_orders ?? 0} color="hsl(270,65%,58%)" />
+              <ReportStat label="Beds Total" value={dashData?.beds?.total ?? 0} />
+              <ReportStat label="Beds Occupied" value={dashData?.beds?.occupied ?? 0} color="var(--color-danger)" />
             </div>
           </div>
         </div>
@@ -110,11 +166,11 @@ export default function Reports() {
       {tab === 'diagnoses' && (
         <div className="card">
           <div className="card-header"><h3>Top Diagnoses</h3></div>
-          {diagnoses.length === 0 ? (
+          {mappedDiagnoses.length === 0 ? (
             <div className="empty-state"><BarChart3 size={48}/><p style={{marginTop:'0.5rem'}}>No diagnoses recorded yet</p></div>
           ) : (
             <ResponsiveContainer width="100%" height={360}>
-              <BarChart data={diagnoses} layout="vertical" barSize={20}>
+              <BarChart data={mappedDiagnoses} layout="vertical" barSize={20}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis type="number" tick={{ fill:'var(--text-muted)', fontSize:12 }} axisLine={false} tickLine={false} />
                 <YAxis type="category" dataKey="diagnosis_code" tick={{ fill:'var(--text-secondary)', fontSize:11 }} width={80} axisLine={false} tickLine={false} />
@@ -129,11 +185,11 @@ export default function Reports() {
       {tab === 'stock' && (
         <div className="card">
           <div className="card-header"><h3>Drug Stock Levels (Bottom 10)</h3></div>
-          {!stock || stock.length === 0 ? (
+          {!mappedStock || mappedStock.length === 0 ? (
             <div className="empty-state"><BarChart3 size={48}/><p style={{marginTop:'0.5rem'}}>No stock data</p></div>
           ) : (
             <ResponsiveContainer width="100%" height={360}>
-              <BarChart data={stock} layout="vertical" barSize={20}>
+              <BarChart data={mappedStock} layout="vertical" barSize={20}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                 <XAxis type="number" tick={{ fill:'var(--text-muted)', fontSize:12 }} axisLine={false} tickLine={false} />
                 <YAxis type="category" dataKey="name_generic_en" tick={{ fill:'var(--text-secondary)', fontSize:11 }} width={120} axisLine={false} tickLine={false} />

@@ -207,7 +207,7 @@ CREATE TABLE prescriptions (
     visit_id UUID NOT NULL REFERENCES visits(id),
     prescribed_by UUID NOT NULL REFERENCES users(id),
     prescribed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'dispensed', 'partially_dispensed', 'cancelled')),
+    status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending_payment', 'pending', 'dispensed', 'partially_dispensed', 'cancelled')),
     notes TEXT
 );
 

@@ -111,7 +111,15 @@ function OpenVisitModal({ onClose, onSaved, doctor }) {
     if (!search) return
     const t = setTimeout(async () => {
       try {
-        const params = search.match(/^\+?\d/) ? { phone: search } : { name: search }
+        const s = search.trim()
+        let params = {}
+        if (/^P[-]?\d+$/i.test(s)) {
+          params = { patient_number: s }
+        } else if (/^\+?\d{7,}$/.test(s)) {
+          params = { phone: s }
+        } else {
+          params = { query: s }
+        }
         const res = await patientsApi.list(params)
         setPatients(res.data.items ?? res.data)
       } catch {}
