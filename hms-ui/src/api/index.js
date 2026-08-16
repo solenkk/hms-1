@@ -1,17 +1,17 @@
 import axios from 'axios'
-
+ 
 const api = axios.create({
   baseURL: '/api/v1',
   headers: { 'Content-Type': 'application/json' },
 })
-
+ 
 // Attach JWT token on every request
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('hms_token')
   if (token) config.headers.Authorization = `Bearer ${token}`
   return config
 })
-
+ 
 // Handle 401 globally
 api.interceptors.response.use(
   (res) => res,
@@ -24,9 +24,9 @@ api.interceptors.response.use(
     return Promise.reject(err)
   }
 )
-
+ 
 export default api
-
+ 
 // ─── Error helper ─────────────────────────────────────────────
 // Normalizes FastAPI error responses into a human-readable string.
 // Handles the three shapes the backend returns:
@@ -50,24 +50,27 @@ export function apiError(err, fallback = 'Something went wrong') {
   if (typeof d === 'object') return d.en || d.am || fallback
   return fallback
 }
-
+ 
 // ─── Auth ─────────────────────────────────────────────────────
 export const authApi = {
-  login: (data) => api.post('/auth/login', data),
-  me:    ()     => api.get('/auth/me'),
+  login:          (data) => api.post('/auth/login', data),
+  me:             ()     => api.get('/auth/me'),
   changePassword: (data) => api.post('/auth/change-password', data),
+  doctors:        ()     => api.get('/auth/doctors'),
 }
-
+ 
 // ─── Patients ─────────────────────────────────────────────────
 export const patientsApi = {
   list:       (params) => api.get('/patients', { params }),
+  todayQueue: ()       => api.get('/patients', { params: { today_queue: true, limit: 100 } }),
   get:        (id)     => api.get(`/patients/${id}`),
   create:     (data)   => api.post('/patients', data),
   update:     (id, data) => api.put(`/patients/${id}`, data),
   deactivate: (id)     => api.delete(`/patients/${id}`),
   consent:    (id, data) => api.post(`/patients/${id}/consent`, data),
+  checkin:    (id)     => api.post(`/patients/${id}/checkin`),
 }
-
+ 
 // ─── Visits ───────────────────────────────────────────────────
 export const visitsApi = {
   list:    (params) => api.get('/visits', { params }),
@@ -77,7 +80,7 @@ export const visitsApi = {
   vitals:  (id, data) => api.post(`/visits/${id}/vitals`, data),
   patientVisits: (patientId, params) => api.get(`/visits/patients/${patientId}/visits`, { params }),
 }
-
+ 
 // ─── EMR ──────────────────────────────────────────────────────
 export const emrApi = {
   getNotes:   (visitId) => api.get(`/emr/visits/${visitId}/notes`),
@@ -88,7 +91,7 @@ export const emrApi = {
   summary:    (patientId) => api.get(`/emr/patients/${patientId}/summary`),
   searchDiagnoses: (q) => api.get('/emr/diagnoses/search', { params: { q } }),
 }
-
+ 
 // ─── Lab ──────────────────────────────────────────────────────
 export const labApi = {
   testTypes:      (params) => api.get('/lab/test-types', { params }),
@@ -105,7 +108,7 @@ export const labApi = {
   verify:         (id)   => api.post(`/lab/orders/items/${id}/verify`),
   history:        (pid)  => api.get(`/lab/patients/${pid}/history`),
 }
-
+ 
 // ─── Pharmacy ─────────────────────────────────────────────────
 export const pharmacyApi = {
   drugs:       (params) => api.get('/pharmacy/drugs', { params }),
@@ -123,7 +126,7 @@ export const pharmacyApi = {
   recordInjection: (data) => api.post('/pharmacy/injections', data),
   listInjectionLogs: (itemId) => api.get(`/pharmacy/prescriptions/items/${itemId}/injections`),
 }
-
+ 
 // ─── Billing ──────────────────────────────────────────────────
 export const billingApi = {
   create:     (data)   => api.post('/billing/invoices', data),
@@ -133,7 +136,7 @@ export const billingApi = {
   pay:        (data)   => api.post('/billing/payments', data),
   cancel:     (id, reason) => api.post(`/billing/invoices/${id}/cancel`, null, { params: { reason } }),
 }
-
+ 
 // ─── Beds ─────────────────────────────────────────────────────
 export const bedsApi = {
   wards:    ()     => api.get('/beds/wards'),
@@ -142,7 +145,7 @@ export const bedsApi = {
   discharge:(id, data) => api.put(`/beds/admissions/${id}/discharge`, data),
   getAdmission: (id) => api.get(`/beds/admissions/${id}`),
 }
-
+ 
 // ─── Reports ──────────────────────────────────────────────────
 export const reportsApi = {
   dashboard: ()       => api.get('/reports/dashboard'),
@@ -152,8 +155,38 @@ export const reportsApi = {
   labPerf:   ()       => api.get('/reports/lab-performance'),
   drugStock: ()       => api.get('/reports/drug-stock'),
   breach:    ()       => api.get('/reports/audit/breach-candidates'),
+ 
+  // ─── Government / HMIS / PHEM ──────────────────────────────
+  hmisMonthly:  (year, month, facilityId) =>
+    api.get('/reports/hmis/monthly', { params: { year, month, ...(facilityId ? { facility_id: facilityId } : {}) } }),
+  hmisWeekly:   (weekStart, facilityId) =>
+    api.get('/reports/hmis/weekly', { params: { week_start: weekStart, ...(facilityId ? { facility_id: facilityId } : {}) } }),
+  hmisCohort:   (targetDate, facilityId) =>
+    api.get('/reports/hmis/cohort', { params: { target_date: targetDate, ...(facilityId ? { facility_id: facilityId } : {}) } }),
+  hmisWeekLabel: (weekStart) =>
+    api.get('/reports/hmis/week-label', { params: { week_start: weekStart } }),
+ 
+  // ─── Exports ──────────────────────────────────────────────
+  // Fetched as authenticated blobs (the shared `api` instance already
+  // attaches the Bearer token via the request interceptor above) rather
+  // than opened as a bare URL. A raw window.open(url) can't carry an
+  // Authorization header, and putting the token in the URL as a query
+  // param instead would leak it into browser history and server/proxy
+  // access logs in plaintext. The caller (Reports.jsx) turns the blob
+  // into an object URL for download or opening in a new tab.
+  hmisExportExcel: (year, month, facilityId) =>
+    api.get('/reports/hmis/export/excel', {
+      params: { year, month, ...(facilityId ? { facility_id: facilityId } : {}) },
+      responseType: 'blob',
+    }),
+  hmisExportHtml: (year, month, facilityId) =>
+    api.get('/reports/hmis/export/html', {
+      params: { year, month, ...(facilityId ? { facility_id: facilityId } : {}) },
+      responseType: 'blob',
+    }),
 }
-
+ 
+ 
 // ─── Admin ────────────────────────────────────────────────────
 export const adminApi = {
   roles:          ()     => api.get('/admin/roles'),

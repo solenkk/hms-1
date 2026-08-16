@@ -11,3 +11,176 @@
 .report-stat-item:last-child { border-bottom: none; }
 .report-stat-label { color: var(--text-secondary); }
 .report-stat-value { font-weight: 600; color: var(--text-primary); font-size: 1rem; }
+
+/* ─── Government Reports / HMIS tab ──────────────────────────── */
+.hmis-tab-root { display: flex; flex-direction: column; gap: 1rem; }
+
+.hmis-subtab-bar {
+  display: flex; gap: 0.5rem; flex-wrap: wrap;
+}
+.hmis-subtab-btn {
+  padding: 0.45rem 1.1rem;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  border: 1.5px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.hmis-subtab-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
+.hmis-subtab-btn.active {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: #fff;
+}
+
+/* Controls row */
+.hmis-controls-row {
+  display: flex; align-items: flex-end; flex-wrap: wrap;
+  gap: 0.75rem; width: 100%;
+}
+.hmis-control-group { display: flex; flex-direction: column; gap: 0.3rem; }
+.hmis-label { font-size: 0.75rem; font-weight: 500; color: var(--text-secondary); }
+.hmis-select, .hmis-input {
+  padding: 0.38rem 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg-input, var(--bg-surface));
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  min-width: 130px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+.hmis-select:focus, .hmis-input:focus { border-color: var(--color-primary); }
+
+.hmis-generate-btn {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 1rem;
+  font-size: 0.84rem;
+  align-self: flex-end;
+}
+
+/* EPI Week badge */
+.hmis-week-label-badge {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.35rem 0.85rem;
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, transparent);
+  border-radius: 8px;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+  max-width: 480px;
+}
+
+.hmis-helper-text {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  max-width: 340px;
+  margin: 0;
+}
+
+/* Export buttons row */
+.hmis-export-row {
+  display: flex; gap: 0.6rem; margin-left: auto; align-items: center;
+}
+.hmis-export-btn {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.38rem 0.95rem;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1.5px solid;
+  transition: all 0.15s;
+}
+.hmis-export-excel {
+  background: color-mix(in srgb, #2ec98c 12%, transparent);
+  border-color: #2ec98c;
+  color: #1aa870;
+}
+.hmis-export-excel:hover { background: #2ec98c; color: #fff; }
+.hmis-export-pdf {
+  background: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.hmis-export-pdf:hover { background: var(--color-primary); color: #fff; }
+
+/* Preview area */
+.hmis-preview-area {
+  min-height: 200px;
+  padding: 1rem 1.25rem;
+}
+.hmis-prompt-state, .hmis-loading-state, .hmis-empty-state {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 0.6rem; padding: 2.5rem 1rem; color: var(--text-muted);
+  text-align: center;
+}
+.hmis-prompt-state p, .hmis-loading-state p, .hmis-empty-state p {
+  font-size: 0.88rem; max-width: 340px; margin: 0;
+}
+.hmis-empty-state { color: var(--color-warning, #f8a722); }
+
+/* Section blocks in preview */
+.hmis-preview-wrap { display: flex; flex-direction: column; gap: 1.5rem; }
+.hmis-section-block {}
+.hmis-section-header {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-primary);
+  padding: 0.3rem 0 0.5rem;
+  border-bottom: 2px solid var(--color-primary);
+  margin-bottom: 0.6rem;
+}
+
+.hmis-table-wrap { overflow-x: auto; }
+.hmis-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.83rem;
+}
+.hmis-table th, .hmis-table td {
+  padding: 0.5rem 0.85rem;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+.hmis-th-indicator {
+  text-align: left;
+  background: var(--bg-surface);
+  font-weight: 600;
+  min-width: 220px;
+  white-space: normal;
+}
+.hmis-th-group {
+  text-align: center;
+  background: var(--bg-surface);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.hmis-td-indicator {
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  white-space: normal;
+}
+.hmis-td-value {
+  text-align: center;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+}
+.hmis-row-even { background: transparent; }
+.hmis-row-odd  { background: color-mix(in srgb, var(--bg-surface) 60%, transparent); }
+
+/* Spinning animation for Loader2 */
+.spinning { animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 700px) {
+  .hmis-controls-row { flex-direction: column; align-items: stretch; }
+  .hmis-export-row { margin-left: 0; }
+}

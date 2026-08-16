@@ -69,6 +69,49 @@ export default function PatientDetail() {
         </div>
       )}
 
+      {/* Read-only banner — shown to clinical staff when patient not in today's queue */}
+      {patient.registration_paid && !patient.is_checked_in_today && ['doctor', 'nurse', 'lab_technician', 'pharmacist'].includes(user?.role) && (
+        <div style={{
+          background: 'hsla(220,70%,55%,0.08)',
+          border: '1px solid hsla(220,70%,55%,0.25)',
+          color: 'var(--text-primary)',
+          padding: '0.75rem 1rem',
+          borderRadius: 'var(--border-radius)',
+          marginBottom: '1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '0.88rem',
+          gap: '1rem',
+        }}>
+          <div>
+            📋 <strong>Read-only mode:</strong> This patient is not in today's queue. You can view records, order labs/pharmacy, and edit injections — but cannot open a new visit or edit demographics until the receptionist checks them in.
+          </div>
+        </div>
+      )}
+
+      {/* Check-in nudge for receptionists when patient is not in today's queue */}
+      {patient.registration_paid && !patient.is_checked_in_today && ['receptionist', 'admin'].includes(user?.role) && (
+        <div style={{
+          background: 'hsla(162,72%,45%,0.07)',
+          border: '1px solid hsla(162,72%,45%,0.3)',
+          color: 'var(--text-primary)',
+          padding: '0.75rem 1rem',
+          borderRadius: 'var(--border-radius)',
+          marginBottom: '1rem',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          fontSize: '0.88rem',
+          gap: '1rem',
+        }}>
+          <div>
+            🟡 This patient is <strong>not in today's queue</strong>. Check them in to add them to the doctor's queue for today.
+          </div>
+          <CheckInBannerButton patientId={patient.id} onCheckedIn={loadPatient} />
+        </div>
+      )}
+
       {/* Patient Header Card */}
       <div className="patient-header-card card">
         <div className="patient-avatar-large">
@@ -134,6 +177,31 @@ function MetaItem({ label, value, mono }) {
       <span className="meta-label">{label}</span>
       <span className={`meta-value ${mono ? 'mono' : ''}`}>{value}</span>
     </div>
+  )
+}
+
+function CheckInBannerButton({ patientId, onCheckedIn }) {
+  const [loading, setLoading] = useState(false)
+  const handleCheckin = async () => {
+    setLoading(true)
+    try {
+      const res = await patientsApi.checkin(patientId)
+      const data = res.data
+      if (data.needs_reregistration) {
+        toast.success(`Checked in. ⚠️ Re-registration invoice created (last visit > ${data.grace_days} days ago).`, { duration: 6000 })
+      } else {
+        toast.success('Patient checked in to today\'s queue')
+      }
+      if (onCheckedIn) onCheckedIn()
+    } catch (err) {
+      const d = err.response?.data?.detail
+      toast.error(typeof d === 'object' ? d.en : d || 'Check-in failed')
+    } finally { setLoading(false) }
+  }
+  return (
+    <button className="btn btn-accent btn-sm" onClick={handleCheckin} disabled={loading} style={{ whiteSpace:'nowrap' }}>
+      {loading ? 'Checking in…' : '✓ Check In'}
+    </button>
   )
 }
 
