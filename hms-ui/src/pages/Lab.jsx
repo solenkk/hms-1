@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { labApi, visitsApi, apiError } from '../api'
-import { FlaskConical, Plus, Pencil, Trash2 } from 'lucide-react'
+import { labApi, adminApi, visitsApi, apiError } from '../api'
+import { FlaskConical, Plus, Pencil, Trash2, Check } from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
+import IndicatorRulesEditor from '../components/IndicatorRulesEditor'
 
 export default function Lab() {
   const [orders, setOrders] = useState([])
@@ -262,6 +263,7 @@ const emptyParam = () => ({
 
 function TestTypeModal({ testType, onClose, onSaved }) {
   const isEdit = Boolean(testType)
+  const existingInd = testType?.indicator_definition
   const [form, setForm] = useState({
     name_en: testType?.name_en ?? '',
     name_am: testType?.name_am ?? '',
@@ -282,6 +284,19 @@ function TestTypeModal({ testType, onClose, onSaved }) {
       normal_range_text: p.normal_range_text ?? '',
     }))
   )
+  
+  // Reportable Indicator Setup inline state
+  const [isReportable, setIsReportable] = useState(Boolean(existingInd?.enabled ?? false))
+  const [reportableLabel, setReportableLabel] = useState(existingInd?.label || testType?.name_en || '')
+  const [reportableSection, setReportableSection] = useState(existingInd?.section || 'Lab Testing')
+  const [outcomeShape, setOutcomeShape] = useState(existingInd?.outcome_shape || 'buttons')
+  const [minAge, setMinAge] = useState(existingInd?.min_age ?? '')
+  const [maxAge, setMaxAge] = useState(existingInd?.max_age ?? '')
+  const [options, setOptions] = useState(existingInd?.options?.length ? existingInd.options : [
+    { option_label: 'Reactive', option_value: 'positive', report_event_code: 'hiv_test_positive', sort_order: 0 },
+    { option_label: 'Non-Reactive', option_value: 'negative', report_event_code: 'hiv_test_negative', sort_order: 1 }
+  ])
+  const [thresholds, setThresholds] = useState(existingInd?.thresholds || [])
   const [saving, setSaving] = useState(false)
 
   const handle = e => {
@@ -317,6 +332,20 @@ function TestTypeModal({ testType, onClose, onSaved }) {
         normal_range_text: p.normal_range_text || null,
         sort_order: index,
       })),
+      reportable_setup: isReportable ? {
+        enabled: true,
+        label: (reportableLabel.trim() || form.name_en.trim()),
+        section: (reportableSection.trim() || 'Lab Testing'),
+        outcome_shape: outcomeShape,
+        min_age: minAge === '' ? null : Number(minAge),
+        max_age: maxAge === '' ? null : Number(maxAge),
+        options: outcomeShape === 'buttons' ? options : [],
+        thresholds: outcomeShape === 'threshold' ? thresholds.map(t => ({
+          ...t,
+          min_value: t.min_value === '' ? null : Number(t.min_value),
+          max_value: t.max_value === '' ? null : Number(t.max_value)
+        })) : []
+      } : { enabled: false, label: form.name_en.trim(), section: 'Lab Testing', outcome_shape: 'buttons', options: [], thresholds: [] }
     }
     try {
       const res = isEdit
@@ -332,7 +361,7 @@ function TestTypeModal({ testType, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={{ maxWidth: '680px', width: '90%', maxHeight: '90vh', overflowY: 'auto' }}>
         <div className="modal-header">
           <h3>{isEdit ? `Edit Test — ${testType.name_en}` : 'Add Lab Test'}</h3>
           <button className="btn btn-ghost btn-sm btn-icon" onClick={onClose}>✕</button>
@@ -371,7 +400,7 @@ function TestTypeModal({ testType, onClose, onSaved }) {
             <textarea className="form-input" rows={2} name="instructions_en" value={form.instructions_en} onChange={handle} placeholder="Patient prep, e.g. fasting 8 hours" />
           </div>
 
-          {/* Parameters the lab technician will fill in when entering results */}
+          {/* Parameters section */}
           <div style={{ marginBottom: '1rem' }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:'0.5rem' }}>
               <label className="form-label" style={{ margin: 0 }}>Result Parameters</label>
@@ -418,8 +447,65 @@ function TestTypeModal({ testType, onClose, onSaved }) {
             )}
           </div>
 
+          {/* Inline Reportable Indicator Setup Toggle & Section */}
+          <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px', padding: '1rem', marginBottom: '1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', cursor: 'pointer', fontWeight: 600, fontSize: '0.9rem' }}>
+              <input 
+                type="checkbox" 
+                checked={isReportable} 
+                onChange={e => {
+                  const val = e.target.checked
+                  setIsReportable(val)
+                  if (val && !reportableLabel) setReportableLabel(form.name_en)
+                }} 
+              />
+              Reportable to Government Report (HMIS / PHEM)?
+            </label>
+
+            {isReportable && (
+              <div style={{ marginTop: '1rem' }}>
+                <div className="form-grid" style={{ marginBottom: '1rem' }}>
+                  <div className="form-group">
+                    <label className="form-label">Indicator Label (on form) *</label>
+                    <input 
+                      className="form-input" 
+                      value={reportableLabel} 
+                      onChange={e => setReportableLabel(e.target.value)} 
+                      required={isReportable}
+                      placeholder="e.g. HIV 1/2 Rapid Test" 
+                    />
+                  </div>
+
+                  <div className="form-group">
+                    <label className="form-label">Government Form Section *</label>
+                    <input 
+                      className="form-input" 
+                      value={reportableSection} 
+                      onChange={e => setReportableSection(e.target.value)} 
+                      required={isReportable}
+                      placeholder="e.g. HIV Testing" 
+                    />
+                  </div>
+                </div>
+
+                <IndicatorRulesEditor
+                  outcomeShape={outcomeShape}
+                  setOutcomeShape={setOutcomeShape}
+                  options={options}
+                  setOptions={setOptions}
+                  thresholds={thresholds}
+                  setThresholds={setThresholds}
+                  minAge={minAge}
+                  setMinAge={setMinAge}
+                  maxAge={maxAge}
+                  setMaxAge={setMaxAge}
+                />
+              </div>
+            )}
+          </div>
+
           {isEdit && (
-            <label style={{ display:'flex', alignItems:'center', gap:'0.5rem', cursor:'pointer', fontSize:'0.88rem', marginBottom:'1rem' }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', cursor: 'pointer', fontSize: '0.88rem', marginBottom: '1rem' }}>
               <input type="checkbox" name="is_active" checked={form.is_active} onChange={handle} />
               Active (uncheck to retire — doctors can no longer order it)
             </label>
@@ -437,90 +523,246 @@ function TestTypeModal({ testType, onClose, onSaved }) {
   )
 }
 
-function NewOrderModal({ testTypes, onClose, onSaved }) {
+function LabOrdersList({ orders, canWorkOrders, canVerify, onAction, onEnterResults }) {
+  if (orders.length === 0) return <div className="empty-state">No lab orders found.</div>
+
+  return (
+    <div className="orders-list" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+      {orders.map(o => (
+        <div key={o.id} className="card order-card">
+          <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <strong>Order #{o.id.slice(0, 8)}</strong> — Patient: {o.patient_name || 'N/A'} (MRN: {o.mrn || 'N/A'})
+              <span className={`status-badge status-${o.status}`} style={{ marginLeft: '0.75rem' }}>{o.status}</span>
+            </div>
+            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+              Order Date: {new Date(o.created_at).toLocaleString()}
+            </div>
+          </div>
+          <div className="card-body">
+            <table className="table" style={{ width: '100%', marginBottom: 0 }}>
+              <thead>
+                <tr>
+                  <th>Test Name</th>
+                  <th>Status</th>
+                  <th>Results</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(o.items || []).map(item => (
+                  <tr key={item.id}>
+                    <td><strong>{item.test_name_en}</strong></td>
+                    <td><span className={`status-badge status-${item.status}`}>{item.status}</span></td>
+                    <td>
+                      {item.results && item.results.length > 0 ? (
+                        <div style={{ fontSize: '0.85rem' }}>
+                          {item.results.map(r => (
+                            <div key={r.id || r.parameter_id}>
+                              {r.parameter_name_en}: <strong>{r.result_value}</strong>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <em style={{ color: 'var(--text-muted)', fontSize: '0.85rem' }}>No results entered yet</em>
+                      )}
+                    </td>
+                    <td>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        {canWorkOrders && item.status === 'pending_sample' && (
+                          <button className="btn btn-sm btn-outline" onClick={() => onAction(item.id, 'accept')}>
+                            Accept
+                          </button>
+                        )}
+                        {canWorkOrders && item.status === 'pending_sample' && (
+                          <button className="btn btn-sm btn-outline" onClick={() => onAction(item.id, 'collect')}>
+                            Collect Sample
+                          </button>
+                        )}
+                        {canWorkOrders && item.status === 'in_progress' && (
+                          <button className="btn btn-sm btn-primary" onClick={() => onEnterResults(item)}>
+                            Enter Results
+                          </button>
+                        )}
+                        {canVerify && item.status === 'completed' && !item.verified_at && (
+                          <button className="btn btn-sm btn-success" onClick={() => onAction(item.id, 'verify')}>
+                            Verify Results
+                          </button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TestCatalogueList({ testTypes, onEdit, onReload }) {
+  const [toggling, setToggling] = useState(null)
+
+  const handleToggleActive = async (tt) => {
+    setToggling(tt.id)
+    try {
+      if (tt.is_active) {
+        await labApi.retireTestType(tt.id)
+        toast.success(`Retired "${tt.name_en}"`)
+      } else {
+        await labApi.updateTestType(tt.id, { is_active: true })
+        toast.success(`Reactivated "${tt.name_en}"`)
+      }
+      onReload()
+    } catch (err) {
+      toast.error(apiError(err, 'Failed to update test status'))
+    } finally { setToggling(null) }
+  }
+
+  return (
+    <div className="card">
+      <div className="card-header" style={{ display: 'flex', justifyContent: 'space-between' }}>
+        <h3>Test Catalogue ({testTypes.length})</h3>
+      </div>
+      <div className="card-body">
+        <table className="table" style={{ width: '100%' }}>
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Test Name</th>
+              <th>Category</th>
+              <th>Price</th>
+              <th>Turnaround</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {testTypes.map(tt => (
+              <tr key={tt.id} style={{ opacity: tt.is_active ? 1 : 0.55 }}>
+                <td><code>{tt.code}</code></td>
+                <td>
+                  <strong>{tt.name_en}</strong>
+                  {tt.name_am && <span style={{ color: 'var(--text-muted)', marginLeft: '0.4rem', fontSize: '0.85rem' }}>({tt.name_am})</span>}
+                </td>
+                <td>{tt.category || 'General'}</td>
+                <td>ETB {tt.price != null ? Number(tt.price).toFixed(2) : '0.00'}</td>
+                <td>{tt.turnaround_time_hours ? `${tt.turnaround_time_hours} hrs` : 'N/A'}</td>
+                <td>
+                  <span className={`badge ${tt.is_active ? 'badge-success' : 'badge-neutral'}`}>
+                    {tt.is_active ? 'Active' : 'Retired'}
+                  </span>
+                </td>
+                <td>
+                  <div style={{ display: 'flex', gap: '0.4rem' }}>
+                    <button className="btn btn-sm btn-ghost btn-icon" onClick={() => onEdit(tt)} title="Edit Test">
+                      <Pencil size={15} />
+                    </button>
+                    <button
+                      className={`btn btn-sm ${tt.is_active ? 'btn-ghost text-danger' : 'btn-outline'}`}
+                      disabled={toggling === tt.id}
+                      onClick={() => handleToggleActive(tt)}
+                    >
+                      {tt.is_active ? 'Retire' : 'Reactivate'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function CreateOrderModal({ onClose, onSaved, testTypes }) {
+  const [form, setForm] = useState({ visit_id: '', test_type_ids: [], clinical_notes: '' })
   const [visits, setVisits] = useState([])
-  const [form, setForm] = useState({ visit_id: '', priority: 'routine', clinical_notes: '' })
-  const [selectedTests, setSelectedTests] = useState([])
+  const [loadingVisits, setLoadingVisits] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     visitsApi.list({ status: 'open' })
       .then(r => setVisits(r.data))
-      .catch(() => toast.error('Failed to load open visits'))
+      .catch(err => toast.error(apiError(err, 'Failed to load open visits')))
+      .finally(() => setLoadingVisits(false))
   }, [])
 
-  const toggleTest = (id) =>
-    setSelectedTests(prev => prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id])
+  const toggleTest = (id) => {
+    setForm(f => ({
+      ...f,
+      test_type_ids: f.test_type_ids.includes(id)
+        ? f.test_type_ids.filter(x => x !== id)
+        : [...f.test_type_ids, id]
+    }))
+  }
 
   const submit = async (e) => {
     e.preventDefault()
-    if (!form.visit_id) return toast.error('Select a visit')
-    if (selectedTests.length === 0) return toast.error('Select at least one test')
+    if (!form.visit_id) return toast.error('Select a patient visit')
+    if (form.test_type_ids.length === 0) return toast.error('Select at least one lab test')
     setSaving(true)
     try {
-      await labApi.createOrder({
-        visit_id: form.visit_id,
-        test_type_ids: selectedTests,
-        priority: form.priority,
-        clinical_notes: form.clinical_notes || undefined,
-      })
+      await labApi.createOrder(form)
       toast.success('Lab order created')
       onSaved()
     } catch (err) {
-      toast.error(apiError(err, 'Failed to create lab order'))
+      toast.error(apiError(err, 'Failed to create order'))
     } finally { setSaving(false) }
   }
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={{ maxWidth: '560px', width: '90%' }}>
         <div className="modal-header">
-          <h3>New Lab Order</h3>
+          <h3>Create Lab Order</h3>
           <button className="btn btn-ghost btn-sm btn-icon" onClick={onClose}>✕</button>
         </div>
         <form onSubmit={submit}>
-          <div className="form-group" style={{ marginBottom:'1rem' }}>
-            <label className="form-label">Visit *</label>
-            <select className="form-select" value={form.visit_id}
-                    onChange={e => setForm(f => ({ ...f, visit_id: e.target.value }))} required>
-              <option value="">Select an open visit…</option>
-              {visits.map(v => (
-                <option key={v.id} value={v.id}>
-                  {v.visit_number} — {v.patient ? `${v.patient.first_name_en} ${v.patient.last_name_en}` : v.patient_id?.slice(0,8)}
-                </option>
-              ))}
-            </select>
-            {visits.length === 0 && <small className="form-hint">No open visits available.</small>}
+          <div className="form-group" style={{ marginBottom: '1rem' }}>
+            <label className="form-label">Patient Visit *</label>
+            {loadingVisits ? (
+              <div className="spinner-sm" />
+            ) : (
+              <select
+                className="form-select"
+                value={form.visit_id}
+                onChange={e => setForm(f => ({ ...f, visit_id: e.target.value }))}
+                required
+              >
+                <option value="">Select an open visit...</option>
+                {visits.map(v => (
+                  <option key={v.id} value={v.id}>
+                    {v.patient_name || 'Patient'} (MRN: {v.mrn}) — {v.visit_type} ({new Date(v.created_at).toLocaleDateString()})
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
 
-          <div className="form-group" style={{ marginBottom:'1rem' }}>
-            <label className="form-label">Tests *</label>
-            <div style={{ maxHeight:'180px', overflowY:'auto', border:'1px solid var(--border)', borderRadius:'var(--radius-md)', padding:'0.5rem' }}>
-              {testTypes.length === 0 ? (
-                <small className="form-hint">No test types configured.</small>
-              ) : testTypes.map(t => (
-                <label key={t.id} style={{ display:'flex', alignItems:'center', gap:'0.5rem', padding:'0.25rem 0', cursor:'pointer' }}>
-                  <input type="checkbox" checked={selectedTests.includes(t.id)} onChange={() => toggleTest(t.id)} />
-                  <span>{t.name_en}</span>
-                  <span style={{ marginLeft:'auto', color:'var(--text-muted)', fontSize:'0.8rem' }}>
-                    {t.price != null ? `${t.price.toFixed(2)} ETB` : ''}
+          <div className="form-group" style={{ marginBottom: '1rem' }}>
+            <label className="form-label">Select Lab Tests *</label>
+            <div style={{ maxHeight: '200px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.5rem' }}>
+              {testTypes.filter(t => t.is_active).map(tt => (
+                <label key={tt.id} style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', padding: '0.3rem 0', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={form.test_type_ids.includes(tt.id)}
+                    onChange={() => toggleTest(tt.id)}
+                  />
+                  <span>{tt.name_en}</span>
+                  <span style={{ marginLeft: 'auto', fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                    ETB {Number(tt.price).toFixed(2)}
                   </span>
                 </label>
               ))}
             </div>
           </div>
 
-          <div className="form-group" style={{ marginBottom:'1rem' }}>
-            <label className="form-label">Priority</label>
-            <select className="form-select" value={form.priority}
-                    onChange={e => setForm(f => ({ ...f, priority: e.target.value }))}>
-              <option value="routine">Routine</option>
-              <option value="urgent">Urgent</option>
-              <option value="stat">STAT</option>
-            </select>
-          </div>
-
-          <div className="form-group" style={{ marginBottom:'1rem' }}>
+          <div className="form-group" style={{ marginBottom: '1rem' }}>
             <label className="form-label">Clinical Notes</label>
             <textarea className="form-input" rows={3} value={form.clinical_notes}
                       onChange={e => setForm(f => ({ ...f, clinical_notes: e.target.value }))} />
@@ -528,7 +770,9 @@ function NewOrderModal({ testTypes, onClose, onSaved }) {
 
           <div className="modal-footer">
             <button type="button" className="btn btn-ghost" onClick={onClose}>Cancel</button>
-            <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Creating…' : 'Create Order'}</button>
+            <button type="submit" className="btn btn-primary" disabled={saving}>
+              {saving ? 'Creating...' : 'Create Order'}
+            </button>
           </div>
         </form>
       </div>
@@ -539,13 +783,32 @@ function NewOrderModal({ testTypes, onClose, onSaved }) {
 function EnterResultsModal({ item, onClose, onSaved }) {
   const [params, setParams] = useState([])
   const [values, setValues] = useState({})   // parameter_id -> string
+  const [indicatorDef, setIndicatorDef] = useState(null)
+  const [selectedOption, setSelectedOption] = useState(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    labApi.testParameters(item.test_type_id)
-      .then(r => setParams(r.data))
-      .catch(err => toast.error(apiError(err, 'Failed to load test parameters')))
+    Promise.all([
+      labApi.testParameters(item.test_type_id),
+      adminApi.listIndicators({ context_type: 'lab_test', enabled_only: true })
+    ])
+      .then(([paramRes, indRes]) => {
+        const parameterList = paramRes.data || []
+        setParams(parameterList)
+        const match = (indRes.data || []).find(i => String(i.context_ref) === String(item.test_type_id))
+        setIndicatorDef(match || null)
+
+        // Pre-fill values if results exist
+        if (item.results && item.results.length > 0) {
+          const initialVals = {}
+          item.results.forEach(r => {
+            if (r.parameter_id) initialVals[r.parameter_id] = r.result_value
+          })
+          setValues(initialVals)
+        }
+      })
+      .catch(err => toast.error(apiError(err, 'Failed to load test parameter configuration')))
       .finally(() => setLoading(false))
   }, [item.test_type_id])
 
@@ -555,12 +818,38 @@ function EnterResultsModal({ item, onClose, onSaved }) {
     return null
   }
 
+  const handleSelectOption = (opt) => {
+    setSelectedOption(opt.option_label)
+    // Automatically set the result for all parameters or the first parameter
+    if (params.length > 0) {
+      setValues(v => ({ ...v, [params[0].id]: opt.option_label }))
+    }
+  }
+
+  const getThresholdClassification = (valStr) => {
+    if (!valStr || isNaN(Number(valStr)) || !indicatorDef?.thresholds?.length) return null
+    const num = Number(valStr)
+    const matched = indicatorDef.thresholds.find(t => {
+      const min = t.min_value != null ? Number(t.min_value) : -Infinity
+      const max = t.max_value != null ? Number(t.max_value) : Infinity
+      return num >= min && num < max
+    })
+    return matched ? `${num} → will be recorded as "${matched.label}"` : 'Value outside configured ranges'
+  }
+
   const submit = async (e) => {
     e.preventDefault()
-    const results = params
-      .filter(p => (values[p.id] ?? '').trim() !== '')
-      .map(p => ({ parameter_id: p.id, result_value: values[p.id].trim() }))
-    if (results.length === 0) return toast.error('Enter at least one result')
+    let results = []
+    if (params.length > 0) {
+      results = params
+        .filter(p => (values[p.id] ?? '').trim() !== '')
+        .map(p => ({ parameter_id: p.id, result_value: values[p.id].trim() }))
+    } else if (selectedOption) {
+      // Direct option selection when parameters list is empty
+      results = [{ parameter_id: null, result_value: selectedOption }]
+    }
+
+    if (results.length === 0) return toast.error('Enter at least one result or select an outcome option')
     setSaving(true)
     try {
       await labApi.enterResults({ lab_order_item_id: item.id, results })
@@ -573,7 +862,7 @@ function EnterResultsModal({ item, onClose, onSaved }) {
 
   return (
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal">
+      <div className="modal" style={{ maxWidth: '540px', width: '90%' }}>
         <div className="modal-header">
           <h3>Enter Results — {item.test_name_en || `Test #${item.test_type_id}`}</h3>
           <button className="btn btn-ghost btn-sm btn-icon" onClick={onClose}>✕</button>
@@ -581,23 +870,63 @@ function EnterResultsModal({ item, onClose, onSaved }) {
         <form onSubmit={submit}>
           {loading ? (
             <div className="loading-center"><div className="spinner" /></div>
-          ) : params.length === 0 ? (
-            <p className="form-hint" style={{ marginBottom:'1rem' }}>No parameters configured for this test.</p>
           ) : (
-            <div style={{ display:'flex', flexDirection:'column', gap:'0.75rem', marginBottom:'1rem' }}>
-              {params.map(p => (
-                <div key={p.id} className="form-group">
-                  <label className="form-label">
-                    {p.parameter_name_en}{p.unit ? ` (${p.unit})` : ''}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '1rem' }}>
+              {/* Render catalog-driven Buttons if defined */}
+              {indicatorDef && indicatorDef.outcome_shape === 'buttons' && (
+                <div style={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.85rem' }}>
+                  <label className="form-label" style={{ fontWeight: 600, color: 'var(--color-primary)', marginBottom: '0.5rem' }}>
+                    {indicatorDef.label} (Reportable Outcome Selection)
                   </label>
-                  <input
-                    className="form-input"
-                    value={values[p.id] ?? ''}
-                    onChange={e => setValues(v => ({ ...v, [p.id]: e.target.value }))}
-                  />
-                  {range(p) && <small className="form-hint">Normal: {range(p)}</small>}
+                  <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                    {indicatorDef.options.map(opt => {
+                      const isSelected = selectedOption === opt.option_label || (params.length > 0 && values[params[0].id] === opt.option_label)
+                      return (
+                        <button
+                          key={opt.id || opt.option_label}
+                          type="button"
+                          className={`btn ${isSelected ? 'btn-primary' : 'btn-outline'}`}
+                          style={{ borderRadius: '20px', padding: '0.4rem 1rem' }}
+                          onClick={() => handleSelectOption(opt)}
+                        >
+                          {isSelected && <Check size={14} style={{ marginRight: 4 }} />}
+                          {opt.option_label}
+                        </button>
+                      )
+                    })}
+                  </div>
                 </div>
-              ))}
+              )}
+
+              {/* Parameter inputs */}
+              {params.length === 0 && (!indicatorDef || indicatorDef.outcome_shape !== 'buttons') ? (
+                <p className="form-hint">No parameters configured for this test.</p>
+              ) : (
+                params.map(p => {
+                  const classification = indicatorDef && indicatorDef.outcome_shape === 'threshold' ? getThresholdClassification(values[p.id]) : null
+                  return (
+                    <div key={p.id} className="form-group">
+                      <label className="form-label">
+                        {p.parameter_name_en}{p.unit ? ` (${p.unit})` : ''}
+                      </label>
+                      <input
+                        className="form-input"
+                        value={values[p.id] ?? ''}
+                        onChange={e => {
+                          const val = e.target.value
+                          setValues(v => ({ ...v, [p.id]: val }))
+                        }}
+                      />
+                      {range(p) && <small className="form-hint">Normal: {range(p)}</small>}
+                      {classification && (
+                        <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--color-primary)', marginTop: '0.25rem', background: 'color-mix(in srgb, var(--color-primary) 10%, transparent)', padding: '0.25rem 0.5rem', borderRadius: '4px' }}>
+                          ⚡ {classification}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
             </div>
           )}
           <div className="modal-footer">

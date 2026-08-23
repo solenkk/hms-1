@@ -90,6 +90,9 @@ export const emrApi = {
   signNote:   (id)       => api.post(`/emr/notes/${id}/sign`),
   summary:    (patientId) => api.get(`/emr/patients/${patientId}/summary`),
   searchDiagnoses: (q) => api.get('/emr/diagnoses/search', { params: { q } }),
+  recordIndicator: (data) => api.post('/emr/indicators/record', data),
+  getVisitRecordedIndicators: (visitId) => api.get(`/emr/visits/${visitId}/recorded-indicators`),
+  getPatientEMRIndicators: (patientId) => api.get(`/emr/patients/${patientId}/emr-indicators`),
 }
  
 // ─── Lab ──────────────────────────────────────────────────────
@@ -184,6 +187,16 @@ export const reportsApi = {
       params: { year, month, ...(facilityId ? { facility_id: facilityId } : {}) },
       responseType: 'blob',
     }),
+  hmisExportWeeklyExcel: (weekStart, facilityId) =>
+    api.get('/reports/hmis/export/weekly/excel', {
+      params: { week_start: weekStart, ...(facilityId ? { facility_id: facilityId } : {}) },
+      responseType: 'blob',
+    }),
+  hmisExportWeeklyHtml: (weekStart, facilityId) =>
+    api.get('/reports/hmis/export/weekly/html', {
+      params: { week_start: weekStart, ...(facilityId ? { facility_id: facilityId } : {}) },
+      responseType: 'blob',
+    }),
 }
  
  
@@ -193,4 +206,14 @@ export const adminApi = {
   users:          ()     => api.get('/admin/users'),
   createUser:     (data) => api.post('/admin/users', data),
   deactivateUser: (id, reason) => api.delete(`/admin/users/${id}`, { params: { reason } }),
+
+  // Reportable Indicator Definitions CRUD
+  listIndicators:   (params) => api.get('/admin/indicator-definitions', { params }),
+  getIndicator:     (id) => api.get(`/admin/indicator-definitions/${id}`),
+  createIndicator:  (data) => api.post('/admin/indicator-definitions', data),
+  updateIndicator:  (id, data) => api.put(`/admin/indicator-definitions/${id}`, data),
+  disableIndicator: (id) => api.delete(`/admin/indicator-definitions/${id}`),
+  
+  // Lab test types lookup
+  labTestTypes:     () => api.get('/admin/lab-test-types'),
 }

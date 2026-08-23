@@ -1,32 +1,121 @@
 import { useState, useEffect } from 'react'
 import { adminApi, apiError } from '../api'
-import { Settings, Plus, UserX, ShieldCheck } from 'lucide-react'
+import {
+  Plus, UserX, ShieldCheck, Edit2, ToggleLeft, ToggleRight,
+  Sliders, Info, AlertCircle, CheckCircle2, Play
+} from 'lucide-react'
 import { useAuth } from '../context/AuthContext'
 import toast from 'react-hot-toast'
+import IndicatorRulesEditor from '../components/IndicatorRulesEditor'
+import IndicatorModal, { EMR_FIELD_LABELS } from '../components/IndicatorModal'
+
+
+const REPORT_EVENT_CODES = [
+  "hiv_test_positive",
+  "hiv_test_negative",
+  "malaria_rdt_positive_pfalciparum",
+  "malaria_rdt_positive_pvivax",
+  "malaria_rdt_negative",
+  "htn_enrollment",
+  "dm_enrollment",
+  "anc_first_contact",
+  "anc_fourth_contact",
+  "anc_eight_contacts",
+  "maternal_death",
+  "contraceptive_new_implant",
+  "contraceptive_repeat_implant",
+  "contraceptive_new_pill",
+  "contraceptive_repeat_pill",
+  "contraceptive_new_injectable",
+  "contraceptive_repeat_injectable",
+  "contraceptive_new_iud",
+  "contraceptive_repeat_iud",
+  "live_birth",
+  "stillbirth",
+  "delivery_mode_spontaneous",
+  "delivery_mode_cesarean",
+  "delivery_mode_instrumental",
+  "perinatal_death",
+  "obstetric_fistula",
+  "measles_case",
+  "cholera_case",
+  "afp_case",
+  "sam_new_case",
+  "mam_new_case",
+  "anthrax_case",
+  "dracunculiasis_case",
+  "chikungunya_case",
+  "aefi_case",
+  "rabies_exposure",
+  "new_subtype_flu",
+  "neonatal_tetanus",
+  "sars_case",
+  "dengue_case",
+  "human_rabies",
+  "smallpox_case",
+  "vhf_case",
+  "yellow_fever_case",
+  "rift_valley_fever",
+  "monkeypox_case",
+  "covid19_case",
+  "brucellosis_case",
+  "other_notifiable"
+]
 
 export default function Admin() {
-  const [users, setUsers]   = useState([])
-  const [roles, setRoles]   = useState([])
+  const [tab, setTab] = useState('users') // 'users' | 'indicators'
+  const [users, setUsers] = useState([])
+  const [roles, setRoles] = useState([])
+  const [indicators, setIndicators] = useState([])
+  const [labTests, setLabTests] = useState([])
   const [loading, setLoading] = useState(true)
-  const [showModal, setShowModal] = useState(false)
+  const [showUserModal, setShowUserModal] = useState(false)
+  const [showIndicatorModal, setShowIndicatorModal] = useState(false)
+  const [editingIndicator, setEditingIndicator] = useState(null)
+  
   const { user: me } = useAuth()
 
-  const load = async () => {
-    setLoading(true)
+  const loadUsersAndRoles = async () => {
     try {
       const [u, r] = await Promise.all([adminApi.users(), adminApi.roles()])
       setUsers(u.data)
       setRoles(r.data)
-    } catch { toast.error('Failed to load admin data') }
-    finally { setLoading(false) }
+    } catch {
+      toast.error('Failed to load user administration data')
+    }
   }
 
-  useEffect(() => { load() }, [])
+  const loadIndicators = async () => {
+    try {
+      const [indRes, labRes] = await Promise.all([
+        adminApi.listIndicators(),
+        adminApi.labTestTypes()
+      ])
+      setIndicators(indRes.data)
+      setLabTests(labRes.data)
+    } catch {
+      toast.error('Failed to load reportable indicator configuration')
+    }
+  }
+
+  const load = async () => {
+    setLoading(true)
+    if (tab === 'users') {
+      await loadUsersAndRoles()
+    } else {
+      await loadIndicators()
+    }
+    setLoading(false)
+  }
+
+  useEffect(() => {
+    load()
+  }, [tab])
 
   const deactivate = async (id) => {
     if (id === me?.id) return toast.error('Cannot deactivate yourself')
     const reason = window.prompt('Reason for deactivating this user?')
-    if (reason === null) return          // cancelled
+    if (reason === null) return
     if (!reason.trim()) return toast.error('A reason is required to deactivate a user')
     try {
       await adminApi.deactivateUser(id, reason.trim())
@@ -37,74 +126,361 @@ export default function Admin() {
     }
   }
 
+  const toggleIndicatorStatus = async (defn) => {
+    const isEnabling = !defn.enabled
+    try {
+      if (isEnabling) {
+        await adminApi.updateIndicator(defn.id, { enabled: true })
+        toast.success(`Indicator "${defn.label}" enabled`)
+      } else {
+        await adminApi.disableIndicator(defn.id)
+        toast.success(`Indicator "${defn.label}" disabled`)
+      }
+      load()
+    } catch (err) {
+      toast.error(apiError(err, `Failed to update status`))
+    }
+  }
+
+  // Group indicators by section
+  const groupedIndicators = {}
+  indicators.forEach(ind => {
+    const sec = ind.section || 'General'
+    if (!groupedIndicators[sec]) groupedIndicators[sec] = []
+    groupedIndicators[sec].push(ind)
+  })
+
   return (
     <div className="page-body">
+      <style>{`
+        .admin-tabs {
+          display: flex;
+          gap: 0.5rem;
+          margin-bottom: 1.5rem;
+          border-bottom: 1px solid var(--border);
+          padding-bottom: 0.5rem;
+        }
+        .admin-tab-btn {
+          padding: 0.5rem 1.2rem;
+          font-weight: 500;
+          font-size: 0.88rem;
+          border: none;
+          background: transparent;
+          color: var(--text-muted);
+          cursor: pointer;
+          border-bottom: 2px solid transparent;
+          transition: all 0.15s ease;
+        }
+        .admin-tab-btn:hover {
+          color: var(--text-primary);
+        }
+        .admin-tab-btn.active {
+          color: var(--color-primary);
+          border-bottom-color: var(--color-primary);
+        }
+        .indicator-section-block {
+          margin-bottom: 2rem;
+        }
+        .indicator-section-title {
+          font-size: 0.95rem;
+          font-weight: 600;
+          color: var(--color-primary);
+          border-bottom: 1px solid var(--border);
+          padding-bottom: 0.3rem;
+          margin-bottom: 1rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+        }
+        .indicator-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+          gap: 1rem;
+        }
+        .indicator-card {
+          border: 1px solid var(--border);
+          border-radius: 8px;
+          background: var(--bg-card);
+          padding: 1rem;
+          display: flex;
+          flex-direction: column;
+          justify-content: space-between;
+          transition: transform 0.15s, box-shadow 0.15s;
+        }
+        .indicator-card.disabled {
+          opacity: 0.6;
+        }
+        .indicator-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+        .indicator-card-header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          margin-bottom: 0.5rem;
+        }
+        .indicator-card-title {
+          font-weight: 600;
+          font-size: 0.95rem;
+          color: var(--text-primary);
+        }
+        .indicator-badge-row {
+          display: flex;
+          gap: 0.4rem;
+          flex-wrap: wrap;
+          margin-bottom: 0.75rem;
+        }
+        .indicator-badge {
+          font-size: 0.7rem;
+          padding: 0.15rem 0.4rem;
+          border-radius: 4px;
+          font-weight: 500;
+          text-transform: uppercase;
+        }
+        .badge-lab { background: color-mix(in srgb, var(--color-primary) 15%, transparent); color: var(--color-primary); }
+        .badge-emr { background: color-mix(in srgb, var(--color-accent) 15%, transparent); color: var(--color-accent); }
+        .badge-btn { background: color-mix(in srgb, var(--color-warning) 15%, transparent); color: var(--color-warning); }
+        .badge-threshold { background: color-mix(in srgb, #a78bfa 15%, transparent); color: #a78bfa; }
+        
+        .indicator-ref-label {
+          font-size: 0.8rem;
+          color: var(--text-muted);
+          margin-bottom: 0.5rem;
+        }
+        .indicator-mapping-preview {
+          font-size: 0.75rem;
+          border-top: 1px dashed var(--border);
+          padding-top: 0.5rem;
+          margin-top: auto;
+          color: var(--text-secondary);
+        }
+        .indicator-action-bar {
+          display: flex;
+          justify-content: flex-end;
+          gap: 0.5rem;
+          margin-top: 0.8rem;
+          border-top: 1px solid var(--border);
+          padding-top: 0.6rem;
+        }
+        .live-preview-box {
+          background: color-mix(in srgb, var(--bg-surface) 90%, #000);
+          border: 1px solid var(--border);
+          border-radius: 6px;
+          padding: 0.8rem;
+          margin-top: 1rem;
+        }
+        .preview-title {
+          font-size: 0.75rem;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          color: var(--text-muted);
+          margin-bottom: 0.5rem;
+        }
+        .preview-content {
+          min-height: 40px;
+          display: flex;
+          align-items: center;
+          gap: 0.5rem;
+          flex-wrap: wrap;
+        }
+        .preview-btn-mock {
+          padding: 0.35rem 0.8rem;
+          border-radius: 6px;
+          border: 1px solid var(--border);
+          font-size: 0.8rem;
+          background: var(--bg-card);
+          color: var(--text-primary);
+        }
+        .threshold-row {
+          display: grid;
+          grid-template-columns: 1fr 1fr 1.5fr 2fr auto;
+          gap: 0.4rem;
+          align-items: center;
+          margin-bottom: 0.4rem;
+        }
+        .threshold-row input, .threshold-row select {
+          padding: 0.3rem;
+          font-size: 0.8rem;
+        }
+      `}</style>
+
       <div className="page-header">
         <div className="page-header-left">
           <h1>Administration</h1>
-          <p>User management and system configuration</p>
+          <p>{tab === 'users' ? 'User management and system configuration' : 'Reportable government indicator definitions catalogue'}</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setShowModal(true)}>
-          <Plus size={16} /> Create User
+        <div>
+          {tab === 'users' ? (
+            <button className="btn btn-primary" onClick={() => setShowUserModal(true)}>
+              <Plus size={16} /> Create User
+            </button>
+          ) : (
+            <button className="btn btn-primary" onClick={() => { setEditingIndicator(null); setShowIndicatorModal(true); }}>
+              <Plus size={16} /> Create Indicator
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="admin-tabs">
+        <button className={`admin-tab-btn ${tab === 'users' ? 'active' : ''}`} onClick={() => setTab('users')}>
+          👥 System Users
+        </button>
+        <button className={`admin-tab-btn ${tab === 'indicators' ? 'active' : ''}`} onClick={() => setTab('indicators')}>
+          📊 Reportable Indicators
         </button>
       </div>
 
-      <div className="card">
-        <div className="card-header">
-          <h3><ShieldCheck size={18} style={{ marginRight:6, verticalAlign:'middle' }} />System Users</h3>
-        </div>
-        {loading ? (
-          <div className="loading-center"><div className="spinner" /></div>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Full Name</th>
-                  <th>Role</th>
-                  <th>Email</th>
-                  <th>Status</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {users.map(u => (
-                  <tr key={u.id}>
-                    <td>
-                      <div style={{ display:'flex', alignItems:'center', gap:'0.6rem' }}>
-                        <div className="avatar" style={{ width:30,height:30,fontSize:'0.7rem' }}>
-                          {u.full_name_en?.split(' ').map(w=>w[0]).join('').slice(0,2).toUpperCase()}
-                        </div>
-                        <span className="mono">{u.username}</span>
-                      </div>
-                    </td>
-                    <td>{u.full_name_en}</td>
-                    <td><span className="badge badge-blue">{u.role?.name ?? u.role}</span></td>
-                    <td style={{ fontSize:'0.85rem', color:'var(--text-muted)' }}>{u.email}</td>
-                    <td>
-                      {u.is_active
-                        ? <span className="badge badge-green">Active</span>
-                        : <span className="badge badge-gray">Inactive</span>
-                      }
-                    </td>
-                    <td>
-                      {u.is_active && u.id !== me?.id && (
-                        <button className="btn btn-danger btn-sm" onClick={() => deactivate(u.id)}>
-                          <UserX size={13}/> Deactivate
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+      {tab === 'users' && (
+        <div className="card">
+          <div className="card-header">
+            <h3><ShieldCheck size={18} style={{ marginRight: 6, verticalAlign: 'middle' }} />System Users</h3>
           </div>
-        )}
-      </div>
+          {loading ? (
+            <div className="loading-center"><div className="spinner" /></div>
+          ) : (
+            <div className="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Username</th>
+                    <th>Full Name</th>
+                    <th>Role</th>
+                    <th>Email</th>
+                    <th>Status</th>
+                    <th>Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {users.map(u => (
+                    <tr key={u.id}>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <div className="avatar" style={{ width: 30, height: 30, fontSize: '0.7rem' }}>
+                            {u.full_name_en?.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase()}
+                          </div>
+                          <span className="mono">{u.username}</span>
+                        </div>
+                      </td>
+                      <td>{u.full_name_en}</td>
+                      <td><span className="badge badge-blue">{u.role?.name ?? u.role}</span></td>
+                      <td style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>{u.email}</td>
+                      <td>
+                        {u.is_active
+                          ? <span className="badge badge-green">Active</span>
+                          : <span className="badge badge-gray">Inactive</span>
+                        }
+                      </td>
+                      <td>
+                        {u.is_active && u.id !== me?.id && (
+                          <button className="btn btn-danger btn-sm" onClick={() => deactivate(u.id)}>
+                            <UserX size={13} /> Deactivate
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
 
-      {showModal && (
-        <CreateUserModal roles={roles} onClose={() => setShowModal(false)} onSaved={() => { setShowModal(false); load() }} />
+      {tab === 'indicators' && (
+        <div>
+          {loading ? (
+            <div className="loading-center"><div className="spinner" /></div>
+          ) : (
+            Object.entries(groupedIndicators).map(([section, items]) => (
+              <div key={section} className="indicator-section-block">
+                <div className="indicator-section-title">{section}</div>
+                <div className="indicator-grid">
+                  {items.map(ind => {
+                    const testType = ind.context_type === 'lab_test' ? labTests.find(t => String(t.id) === String(ind.context_ref)) : null
+                    return (
+                      <div key={ind.id} className={`indicator-card ${ind.enabled ? '' : 'disabled'}`}>
+                        <div className="indicator-card-header">
+                          <span className="indicator-card-title">{ind.label}</span>
+                          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: ind.enabled ? 'var(--color-green)' : 'var(--text-muted)' }}>
+                            {ind.enabled ? 'ENABLED' : 'DISABLED'}
+                          </span>
+                        </div>
+                        
+                        <div className="indicator-badge-row">
+                          <span className={`indicator-badge ${ind.context_type === 'lab_test' ? 'badge-lab' : 'badge-emr'}`}>
+                            {ind.context_type === 'lab_test' ? 'Lab Test' : 'EMR Field'}
+                          </span>
+                          <span className={`indicator-badge ${ind.outcome_shape === 'buttons' ? 'badge-btn' : 'badge-threshold'}`}>
+                            {ind.outcome_shape}
+                          </span>
+                        </div>
+
+                        <div className="indicator-ref-label">
+                          <strong>Attached to: </strong>
+                          {ind.context_type === 'lab_test' 
+                            ? (testType ? `${testType.name_en} (ID: ${ind.context_ref})` : `Test Type ID ${ind.context_ref}`)
+                            : (EMR_FIELD_LABELS[ind.context_ref] || ind.context_ref)
+                          }
+                        </div>
+
+                        {ind.outcome_shape === 'buttons' && (
+                          <div className="indicator-mapping-preview">
+                            <strong>Options ({ind.options?.length || 0}):</strong>
+                            <div style={{ marginTop: '0.25rem', display: 'flex', flexWrap: 'wrap', gap: '0.2rem' }}>
+                              {ind.options?.map(opt => (
+                                <span key={opt.id} style={{ background: 'var(--bg-surface)', padding: '0.1rem 0.3rem', borderRadius: '4px', border: '1px solid var(--border)', fontSize: '0.7rem' }}>
+                                  {opt.option_label} → <span className="mono" style={{ fontSize: '0.65rem' }}>{opt.report_event_code}</span>
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {ind.outcome_shape === 'threshold' && (
+                          <div className="indicator-mapping-preview">
+                            <strong>Thresholds ({ind.thresholds?.length || 0}):</strong>
+                            <div style={{ marginTop: '0.25rem' }}>
+                              {ind.thresholds?.map(t => (
+                                <div key={t.id} style={{ fontSize: '0.7rem', display: 'flex', justifyContent: 'space-between', borderBottom: '1px dashed var(--border)', padding: '0.1rem 0' }}>
+                                  <span>{t.label} ({t.min_value ?? '-inf'} to {t.max_value ?? '+inf'})</span>
+                                  <span className="mono" style={{ fontSize: '0.65rem' }}>{t.report_event_code}</span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        <div className="indicator-action-bar">
+                          <button className="btn btn-ghost btn-sm" onClick={() => { setEditingIndicator(ind); setShowIndicatorModal(true); }}>
+                            <Edit2 size={13} style={{ marginRight: 4 }} /> Edit
+                          </button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => toggleIndicatorStatus(ind)}>
+                            {ind.enabled ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
+                            <span style={{ marginLeft: 4 }}>{ind.enabled ? 'Disable' : 'Enable'}</span>
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {showUserModal && (
+        <CreateUserModal roles={roles} onClose={() => setShowUserModal(false)} onSaved={() => { setShowUserModal(false); load() }} />
+      )}
+
+      {showIndicatorModal && (
+        <IndicatorModal 
+          defn={editingIndicator} 
+          labTests={labTests} 
+          onClose={() => setShowIndicatorModal(false)} 
+          onSaved={() => { setShowIndicatorModal(false); load() }} 
+        />
       )}
     </div>
   )
@@ -174,3 +550,5 @@ function CreateUserModal({ roles, onClose, onSaved }) {
     </div>
   )
 }
+
+

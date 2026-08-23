@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react'
-import { reportsApi } from '../api'
+import { reportsApi, adminApi, apiError } from '../api'
 import { useAuth } from '../context/AuthContext'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
@@ -7,10 +7,13 @@ import {
 } from 'recharts'
 import {
   BarChart3, FileSpreadsheet, Printer, AlertCircle,
-  Loader2, CalendarDays, Activity,
+  Loader2, CalendarDays, Activity, Search, BookOpen,
+  Plus, Edit3, ToggleLeft, ToggleRight,
 } from 'lucide-react'
+import IndicatorModal, { EMR_FIELD_LABELS } from '../components/IndicatorModal'
 import toast from 'react-hot-toast'
 import './Reports.css'
+
 
 const COLORS = ['#3b9eff','#2ec98c','#f8a722','#e05c5c','#a78bfa','#34d399']
 const PERIODS = ['today', 'week', 'month', 'year']
@@ -34,6 +37,7 @@ function thisYear()  { return new Date().getFullYear() }
 function thisMonth() { return new Date().getMonth() + 1 }
 
 // ─── Helper: trigger a browser download from a Blob, no token in any URL ─────
+// ─── Helper: trigger a browser download from a Blob ──────────────────────────
 function downloadBlob(blob, filename) {
   const objectUrl = URL.createObjectURL(blob)
   const a = document.createElement('a')
@@ -42,19 +46,66 @@ function downloadBlob(blob, filename) {
   document.body.appendChild(a)
   a.click()
   a.remove()
-  // Give the download a moment to start before revoking.
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 30000)
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 60000)
 }
 
-// ─── Helper: open a Blob's content in a new tab, no token in any URL ─────────
-function openBlobInNewTab(blob) {
+// ─── Helper: robust print / PDF trigger via hidden iframe with tab fallback ──
+function printHtmlBlob(blob, title = 'Report') {
   const objectUrl = URL.createObjectURL(blob)
-  window.open(objectUrl, '_blank')
-  setTimeout(() => URL.revokeObjectURL(objectUrl), 30000)
+  const iframe = document.createElement('iframe')
+  iframe.style.position = 'fixed'
+  iframe.style.right = '0'
+  iframe.style.bottom = '0'
+  iframe.style.width = '0'
+  iframe.style.height = '0'
+  iframe.style.border = '0'
+  iframe.style.zIndex = '-9999'
+  iframe.title = title
+  iframe.src = objectUrl
+
+  let printed = false
+  const triggerPrint = () => {
+    if (printed) return
+    printed = true
+    try {
+      iframe.focus()
+      iframe.contentWindow.print()
+    } catch {
+      window.open(objectUrl, '_blank')
+    }
+    setTimeout(() => {
+      iframe.remove()
+      URL.revokeObjectURL(objectUrl)
+    }, 60000)
+  }
+
+  iframe.onload = () => {
+    setTimeout(triggerPrint, 250)
+  }
+  iframe.onerror = () => {
+    window.open(objectUrl, '_blank')
+    iframe.remove()
+  }
+
+  document.body.appendChild(iframe)
+}
+
+// ─── Helper: parse blob error if server responded with an error JSON ─────────
+async function parseBlobError(err, fallbackMessage) {
+  if (err?.response?.data instanceof Blob) {
+    try {
+      const text = await err.response.data.text()
+      const json = JSON.parse(text)
+      return json.detail || json.message || fallbackMessage
+    } catch {
+      return fallbackMessage
+    }
+  }
+  return err?.response?.data?.detail || err?.message || fallbackMessage
 }
 
 // ─── Empty State ─────────────────────────────────────────────────────────────
-function EmptyReportState({ message = 'No reportable events found for this period' }) {
+function EmptyReportState({ message = 'No report data available for this period' }) {
   return (
     <div className="hmis-empty-state">
       <AlertCircle size={42} strokeWidth={1.5} />
@@ -65,109 +116,177 @@ function EmptyReportState({ message = 'No reportable events found for this perio
 
 // ─── Section-grouped preview table ───────────────────────────────────────────
 function HmisPreviewTable({ data }) {
-  if (!data || data.length === 0) return <EmptyReportState />
+  const [searchTerm, setSearchTerm] = useState('')
 
-  // Check if every indicator has zero across all groups
-  const hasAnyData = data.some(row => {
+  if (!data || data.length === 0) return <EmptyReportState message="No indicators defined or available for this report type" />
+
+  // Calculate summary metrics across all data
+  let totalEvents = 0
+  data.forEach(row => {
     const groups = row.groups || {}
-    return Object.values(groups).some(v => {
-      if (typeof v === 'number') return v > 0
-      if (typeof v === 'object') return Object.values(v).some(n => n > 0)
-      return false
+    Object.entries(groups).forEach(([k, v]) => {
+      if (k === 'Total' && typeof v === 'number') {
+        totalEvents += v
+      } else if (!groups.Total && typeof v === 'number') {
+        totalEvents += v
+      }
     })
   })
-  if (!hasAnyData) return <EmptyReportState />
+
+  // Filter rows based on search
+  const filteredData = data.filter(row => {
+    if (!searchTerm.trim()) return true
+    const term = searchTerm.toLowerCase()
+    return (
+      (row.indicator || '').toLowerCase().includes(term) ||
+      (row.section || '').toLowerCase().includes(term)
+    )
+  })
 
   // Group rows by section
   const sections = {}
-  data.forEach(row => {
-    const sec = row.section || 'General'
+  filteredData.forEach(row => {
+    const sec = row.section || 'General Indicators'
     if (!sections[sec]) sections[sec] = []
     sections[sec].push(row)
   })
 
-  // Collect all column headers across all rows in the section
+  // Collect all column headers across all rows in each section
   const getGroupCols = (rows) => {
     const cols = new Set()
-    rows.forEach(r => Object.keys(r.groups || {}).forEach(k => cols.add(k)))
-    return [...cols]
+    rows.forEach(r => Object.keys(r.groups || {}).forEach(k => {
+      if (k !== 'Total') cols.add(k)
+    }))
+    const sorted = [...cols]
+    const hasTotal = rows.some(r => 'Total' in (r.groups || {}))
+    if (hasTotal) sorted.push('Total')
+    return sorted
   }
 
   return (
     <div className="hmis-preview-wrap">
-      {Object.entries(sections).map(([section, rows]) => {
-        const cols = getGroupCols(rows)
-        return (
-          <div key={section} className="hmis-section-block">
-            <div className="hmis-section-header">{section}</div>
-            <div className="hmis-table-wrap">
-              <table className="hmis-table">
-                <thead>
-                  <tr>
-                    <th className="hmis-th-indicator">Indicator</th>
-                    {cols.map(c => <th key={c} className="hmis-th-group">{c}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {rows.map((row, i) => (
-                    <tr key={i} className={i % 2 === 0 ? 'hmis-row-even' : 'hmis-row-odd'}>
-                      <td className="hmis-td-indicator">{row.indicator}</td>
-                      {cols.map(c => {
-                        const val = row.groups?.[c]
-                        return (
-                          <td key={c} className="hmis-td-value">
-                            {typeof val === 'number' ? val : (val === undefined ? '—' : JSON.stringify(val))}
-                          </td>
-                        )
-                      })}
+      {/* ── Summary statistics bar ── */}
+      <div className="hmis-preview-summary-bar">
+        <div className="hmis-summary-stat-pill">
+          <span className="hmis-stat-label">Total Indicators</span>
+          <span className="hmis-stat-val">{data.length}</span>
+        </div>
+        <div className="hmis-summary-stat-pill">
+          <span className="hmis-stat-label">Report Sections</span>
+          <span className="hmis-stat-val">{Object.keys(sections).length}</span>
+        </div>
+        <div className="hmis-summary-stat-pill highlight">
+          <span className="hmis-stat-label">Total Cases / Events</span>
+          <span className="hmis-stat-val">{totalEvents}</span>
+        </div>
+
+        <div className="hmis-preview-search">
+          <Search size={14} className="hmis-search-icon" />
+          <input
+            type="text"
+            className="hmis-search-input"
+            placeholder="Filter indicators or sections..."
+            value={searchTerm}
+            onChange={e => setSearchTerm(e.target.value)}
+          />
+          {searchTerm && (
+            <button className="hmis-clear-search" onClick={() => setSearchTerm('')}>✕</button>
+          )}
+        </div>
+      </div>
+
+      {filteredData.length === 0 ? (
+        <EmptyReportState message={`No indicators match "${searchTerm}"`} />
+      ) : (
+        Object.entries(sections).map(([section, rows]) => {
+          const cols = getGroupCols(rows)
+          return (
+            <div key={section} className="hmis-section-block">
+              <div className="hmis-section-header">
+                <span>{section}</span>
+                <span className="hmis-section-count">{rows.length} {rows.length === 1 ? 'indicator' : 'indicators'}</span>
+              </div>
+              <div className="hmis-table-wrap">
+                <table className="hmis-table">
+                  <thead>
+                    <tr>
+                      <th className="hmis-th-indicator">Indicator</th>
+                      {cols.map(c => (
+                        <th key={c} className={`hmis-th-group ${c === 'Total' ? 'th-total' : ''}`}>
+                          {c}
+                        </th>
+                      ))}
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody>
+                    {rows.map((row, i) => (
+                      <tr key={i} className={i % 2 === 0 ? 'hmis-row-even' : 'hmis-row-odd'}>
+                        <td className="hmis-td-indicator">{row.indicator}</td>
+                        {cols.map(c => {
+                          const val = row.groups?.[c]
+                          const isTotal = c === 'Total'
+                          const isZero = val === 0
+                          const isNumber = typeof val === 'number'
+                          return (
+                            <td
+                              key={c}
+                              className={`hmis-td-value ${isTotal ? 'td-total' : ''} ${!isZero && isNumber ? 'td-nonzero' : ''}`}
+                            >
+                              {isNumber ? val : (val === undefined ? '—' : JSON.stringify(val))}
+                            </td>
+                          )
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
-          </div>
-        )
-      })}
+          )
+        })
+      )}
     </div>
   )
 }
 
 // ─── Cohort preview ──────────────────────────────────────────────────────────
 function CohortPreviewTable({ data }) {
-  if (!data || data.length === 0) return <EmptyReportState />
+  if (!data || data.length === 0) return <EmptyReportState message="No cohort data available" />
 
   const row = data[0]?.groups || {}
-  const isEmpty = Object.values(row).every(cohort =>
-    typeof cohort === 'object' && Object.values(cohort).every(n => n === 0)
-  )
-  if (isEmpty) return <EmptyReportState />
-
   const cohorts = Object.entries(row)
   const outcomeKeys = cohorts.length > 0 ? Object.keys(cohorts[0][1] || {}) : []
 
   return (
     <div className="hmis-preview-wrap">
       <div className="hmis-section-block">
-        <div className="hmis-section-header">6-Month Cohort Outcomes (HTN/DM)</div>
+        <div className="hmis-section-header">
+          <span>6-Month Cohort Outcomes (Hypertension / Diabetes Mellitus)</span>
+        </div>
         <div className="hmis-table-wrap">
           <table className="hmis-table">
             <thead>
               <tr>
-                <th className="hmis-th-indicator">Outcome</th>
+                <th className="hmis-th-indicator">Outcome Classification</th>
                 {cohorts.map(([key]) => (
-                  <th key={key} className="hmis-th-group">{key.toUpperCase()}</th>
+                  <th key={key} className="hmis-th-group">{key.toUpperCase()} Cohort</th>
                 ))}
               </tr>
             </thead>
             <tbody>
               {outcomeKeys.map((outcome, i) => (
                 <tr key={outcome} className={i % 2 === 0 ? 'hmis-row-even' : 'hmis-row-odd'}>
-                  <td className="hmis-td-indicator" style={{ textTransform: 'capitalize' }}>
+                  <td className="hmis-td-indicator" style={{ textTransform: 'capitalize', fontWeight: outcome === 'enrolled' ? 'bold' : 'normal' }}>
                     {outcome.replace(/_/g, ' ')}
                   </td>
-                  {cohorts.map(([key, values]) => (
-                    <td key={key} className="hmis-td-value">{values[outcome] ?? '—'}</td>
-                  ))}
+                  {cohorts.map(([key, values]) => {
+                    const count = values[outcome] ?? 0
+                    return (
+                      <td key={key} className={`hmis-td-value ${count > 0 ? 'td-nonzero' : ''}`}>
+                        {count}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -199,8 +318,7 @@ function GovernmentReportsTab() {
   const [loading, setLoading]       = useState(false)
   const [fetched, setFetched]       = useState(false)
 
-  // Export state (separate from preview loading, so exporting doesn't
-  // disturb the "Generate Preview" button's own loading state)
+  // Export state
   const [exportingExcel, setExportingExcel] = useState(false)
   const [exportingPdf, setExportingPdf]     = useState(false)
 
@@ -235,7 +353,7 @@ function GovernmentReportsTab() {
       setReportData(res.data)
       setFetched(true)
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to load report')
+      toast.error(err?.response?.data?.detail || 'Failed to load report data')
       setReportData(null)
       setFetched(true)
     } finally {
@@ -243,31 +361,53 @@ function GovernmentReportsTab() {
     }
   }, [subTab, month, year, weekStart, cohortDate])
 
-  // ── Excel export: fetch as an authenticated blob, then trigger a
-  //    normal browser download. The auth token travels in the request
-  //    header via the shared axios instance — it never appears in a URL. ──
+  // ── Excel Export Handler (Monthly & Weekly) ──
   const handleExcelExport = async () => {
     setExportingExcel(true)
     try {
-      const res = await reportsApi.hmisExportExcel(year, month)
-      downloadBlob(res.data, `hmis-monthly-report-${year}-${String(month).padStart(2, '0')}.xlsx`)
+      if (subTab === 'monthly') {
+        const res = await reportsApi.hmisExportExcel(year, month)
+        const filename = `HMIS_Monthly_Report_${year}_${String(month).padStart(2, '0')}.xlsx`
+        downloadBlob(
+          new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          filename
+        )
+        toast.success(`Exported ${filename}`)
+      } else if (subTab === 'weekly') {
+        const res = await reportsApi.hmisExportWeeklyExcel(`${weekStart}T00:00:00`)
+        const filename = `PHEM_Weekly_Report_${weekStart}.xlsx`
+        downloadBlob(
+          new Blob([res.data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+          filename
+        )
+        toast.success(`Exported ${filename}`)
+      }
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to export Excel report')
+      const errMsg = await parseBlobError(err, 'Failed to export Excel report')
+      toast.error(errMsg)
     } finally {
       setExportingExcel(false)
     }
   }
 
-  // ── HTML/print export: fetch as an authenticated blob, then open the
-  //    blob's own object URL in a new tab (not the API URL) so the
-  //    already-authenticated content displays without a token in the URL. ──
+  // ── HTML / PDF Print Export Handler (Monthly & Weekly) ──
   const handleHtmlExport = async () => {
     setExportingPdf(true)
     try {
-      const res = await reportsApi.hmisExportHtml(year, month)
-      openBlobInNewTab(res.data)
+      if (subTab === 'monthly') {
+        const res = await reportsApi.hmisExportHtml(year, month)
+        const blob = new Blob([res.data], { type: 'text/html' })
+        printHtmlBlob(blob, `HMIS_Monthly_${year}_${month}`)
+        toast.success('Print document prepared')
+      } else if (subTab === 'weekly') {
+        const res = await reportsApi.hmisExportWeeklyHtml(`${weekStart}T00:00:00`)
+        const blob = new Blob([res.data], { type: 'text/html' })
+        printHtmlBlob(blob, `PHEM_Weekly_${weekStart}`)
+        toast.success('Print document prepared')
+      }
     } catch (err) {
-      toast.error(err?.response?.data?.detail || 'Failed to open print report')
+      const errMsg = await parseBlobError(err, 'Failed to prepare print report')
+      toast.error(errMsg)
     } finally {
       setExportingPdf(false)
     }
@@ -282,8 +422,8 @@ function GovernmentReportsTab() {
       <div className="hmis-subtab-bar">
         {[
           { key: 'monthly', label: '📋 Monthly HMIS' },
-          { key: 'weekly',  label: '📆 Weekly PHEM' },
-          { key: 'cohort',  label: '🩺 Cohort Outcomes' },
+          { key: 'weekly',  label: '📆 Weekly PHEM (Disease Surveillance)' },
+          { key: 'cohort',  label: '🩺 Cohort Outcomes (HTN/DM)' },
         ].map(st => (
           <button
             key={st.key}
@@ -297,8 +437,8 @@ function GovernmentReportsTab() {
       </div>
 
       <div className="card">
-        <div className="card-header" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
-          {/* ── Controls ── */}
+        <div className="card-header" style={{ flexWrap: 'wrap', gap: '0.75rem', alignItems: 'center' }}>
+          {/* ── Monthly Controls ── */}
           {subTab === 'monthly' && (
             <div className="hmis-controls-row">
               <div className="hmis-control-group">
@@ -337,6 +477,7 @@ function GovernmentReportsTab() {
             </div>
           )}
 
+          {/* ── Weekly Controls ── */}
           {subTab === 'weekly' && (
             <div className="hmis-controls-row">
               <div className="hmis-control-group">
@@ -353,7 +494,7 @@ function GovernmentReportsTab() {
                 <div className="hmis-week-label-badge">
                   <CalendarDays size={14} />
                   <span>
-                    <strong>EPI Wk {weekLabel.iso_epi_week}/{weekLabel.iso_year}</strong>
+                    <strong>WHO EPI Wk {weekLabel.iso_epi_week}/{weekLabel.iso_year}</strong>
                     &nbsp;·&nbsp;{weekLabel.ec_label}
                   </span>
                 </div>
@@ -371,10 +512,11 @@ function GovernmentReportsTab() {
             </div>
           )}
 
+          {/* ── Cohort Controls ── */}
           {subTab === 'cohort' && (
             <div className="hmis-controls-row">
               <div className="hmis-control-group">
-                <label className="hmis-label" htmlFor="hmis-cohort-date">Target Date</label>
+                <label className="hmis-label" htmlFor="hmis-cohort-date">Target Assessment Date</label>
                 <input
                   id="hmis-cohort-date"
                   type="date"
@@ -384,7 +526,7 @@ function GovernmentReportsTab() {
                 />
               </div>
               <p className="hmis-helper-text">
-                Shows 6-month HTN/DM cohort outcomes for patients enrolled ~6 months before this date.
+                Evaluates 6-month HTN/DM outcomes for patients enrolled ~6 months prior to selected date.
               </p>
               <button
                 id="hmis-generate-cohort-btn"
@@ -398,15 +540,15 @@ function GovernmentReportsTab() {
             </div>
           )}
 
-          {/* ── Export buttons (monthly only) ── */}
-          {subTab === 'monthly' && (
+          {/* ── Export buttons (Available for Monthly & Weekly) ── */}
+          {(subTab === 'monthly' || subTab === 'weekly') && (
             <div className="hmis-export-row">
               <button
                 id="hmis-export-excel-btn"
                 className="btn hmis-export-btn hmis-export-excel"
                 onClick={handleExcelExport}
                 disabled={exportingExcel}
-                title="Download as Excel (.xlsx)"
+                title="Download formatted Excel workbook (.xlsx)"
               >
                 {exportingExcel ? <Loader2 size={15} className="spinning" /> : <FileSpreadsheet size={15} />}
                 {exportingExcel ? 'Exporting…' : 'Export Excel'}
@@ -416,23 +558,14 @@ function GovernmentReportsTab() {
                 className="btn hmis-export-btn hmis-export-pdf"
                 onClick={handleHtmlExport}
                 disabled={exportingPdf}
-                title="Opens a print-ready HTML page — use File → Print → Save as PDF in your browser"
+                title="Open high-fidelity print / Save as PDF dialog"
               >
                 {exportingPdf ? <Loader2 size={15} className="spinning" /> : <Printer size={15} />}
-                {exportingPdf ? 'Opening…' : 'Export / Print PDF'}
+                {exportingPdf ? 'Preparing…' : 'Print / Export PDF'}
               </button>
             </div>
           )}
         </div>
-
-        {/* Reminder banner: correctness caveat while indicators are still
-            being wired/seeded and verified — remove once fully validated. */}
-        {subTab === 'monthly' && (
-          <div className="hmis-verify-banner">
-            <AlertCircle size={14} />
-            <span>Report preview — verify against source records before final government submission.</span>
-          </div>
-        )}
 
         {/* ── Preview area ── */}
         <div className="hmis-preview-area">
@@ -440,9 +573,9 @@ function GovernmentReportsTab() {
             <div className="hmis-prompt-state">
               <BarChart3 size={38} strokeWidth={1.5} />
               <p>
-                {subTab === 'monthly' && 'Select a month and year, then click "Generate Preview".'}
-                {subTab === 'weekly'  && 'Choose a week start date, then click "Generate Preview".'}
-                {subTab === 'cohort'  && 'Pick a target date, then click "Generate Preview".'}
+                {subTab === 'monthly' && 'Select a month and year, then click "Generate Preview" to review all reportable indicators.'}
+                {subTab === 'weekly'  && 'Choose a week start date, then click "Generate Preview" to view the PHEM surveillance matrix.'}
+                {subTab === 'cohort'  && 'Pick a target date, then click "Generate Preview" to calculate 6-month HTN/DM outcomes.'}
               </p>
             </div>
           )}
@@ -450,7 +583,7 @@ function GovernmentReportsTab() {
           {loading && (
             <div className="hmis-loading-state">
               <Loader2 size={32} className="spinning" />
-              <p>Loading report data…</p>
+              <p>Aggregating reportable indicators…</p>
             </div>
           )}
 
@@ -467,6 +600,221 @@ function GovernmentReportsTab() {
   )
 }
 
+// ─── Reportable Indicators Catalog List Tab ───
+
+function ReportableIndicatorsTab({ loading, indicators, labTests, onRefresh }) {
+  const [search, setSearch] = useState('')
+  const [filterType, setFilterType] = useState('all')
+  const [showModal, setShowModal] = useState(false)
+  const [selectedDefn, setSelectedDefn] = useState(null)
+
+  if (loading) {
+    return (
+      <div className="hmis-loading-state">
+        <Loader2 size={32} className="spinning" />
+        <p>Loading reportable indicator definitions...</p>
+      </div>
+    )
+  }
+
+  const filtered = indicators.filter(ind => {
+    const matchesSearch = ind.label.toLowerCase().includes(search.toLowerCase()) ||
+      (ind.section || '').toLowerCase().includes(search.toLowerCase()) ||
+      (ind.context_ref || '').toLowerCase().includes(search.toLowerCase())
+    
+    const matchesType = filterType === 'all' || ind.context_type === filterType
+    return matchesSearch && matchesType
+  })
+
+  const grouped = {}
+  filtered.forEach(ind => {
+    const sec = ind.section || 'General'
+    if (!grouped[sec]) grouped[sec] = []
+    grouped[sec].push(ind)
+  })
+
+  const handleToggleStatus = async (ind) => {
+    try {
+      if (ind.enabled) {
+        await adminApi.disableIndicator(ind.id)
+        toast.success(`Disabled indicator: ${ind.label}`)
+      } else {
+        await adminApi.updateIndicator(ind.id, { enabled: true })
+        toast.success(`Enabled indicator: ${ind.label}`)
+      }
+      if (onRefresh) onRefresh()
+    } catch (err) {
+      toast.error(apiError(err, 'Failed to update indicator status'))
+    }
+  }
+
+  return (
+    <div className="hmis-tab-root">
+      <div className="hmis-controls-row" style={{ marginBottom: '1.25rem', background: 'var(--bg-card)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--border)', display: 'flex', flexWrap: 'wrap', gap: '1rem', alignItems: 'center' }}>
+        <div className="hmis-control-group" style={{ flex: 1, minWidth: '240px' }}>
+          <span className="hmis-label">Search Indicators</span>
+          <div style={{ position: 'relative' }}>
+            <Search size={16} style={{ position: 'absolute', left: '12px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
+            <input
+              type="text"
+              placeholder="Search by label, section or context reference..."
+              className="hmis-input"
+              style={{ width: '100%', paddingLeft: '2.5rem' }}
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className="hmis-control-group" style={{ display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+          <span className="hmis-label">Filter & Manage</span>
+          <div className="hmis-subtab-bar" style={{ gap: '0.35rem', display: 'flex', alignItems: 'center' }}>
+            <button className={`hmis-subtab-btn ${filterType === 'all' ? 'active' : ''}`} onClick={() => setFilterType('all')}>All</button>
+            <button className={`hmis-subtab-btn ${filterType === 'lab_test' ? 'active' : ''}`} onClick={() => setFilterType('lab_test')}>Lab Tests</button>
+            <button className={`hmis-subtab-btn ${filterType === 'emr_field' ? 'active' : ''}`} onClick={() => setFilterType('emr_field')}>EMR Fields</button>
+            <button
+              className="hmis-subtab-btn"
+              onClick={() => { setSelectedDefn(null); setShowModal(true) }}
+              style={{
+                background: 'var(--color-primary)',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                fontWeight: 600,
+                padding: '0.35rem 0.75rem',
+                borderRadius: '6px',
+                border: 'none',
+                cursor: 'pointer',
+                marginLeft: '0.25rem'
+              }}
+            >
+              <Plus size={14} /> Add Indicator
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {filtered.length === 0 ? (
+        <EmptyReportState message="No indicators match the search or filter criteria" />
+      ) : (
+        Object.entries(grouped).map(([section, items]) => (
+          <div key={section} className="indicator-section-block" style={{ marginBottom: '2rem' }}>
+            <div className="indicator-section-title" style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--color-primary)', borderBottom: '1px solid var(--border)', paddingBottom: '0.3rem', marginBottom: '1rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              {section}
+            </div>
+            <div className="indicator-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1rem' }}>
+              {items.map(ind => {
+                const testType = ind.context_type === 'lab_test' ? labTests.find(t => String(t.id) === String(ind.context_ref)) : null
+                return (
+                  <div key={ind.id} className={`indicator-card ${ind.enabled ? '' : 'disabled'}`} style={{ border: '1px solid var(--border)', borderRadius: '8px', background: 'var(--bg-card)', padding: '1.2rem', display: 'flex', flexDirection: 'column', gap: '0.75rem', opacity: ind.enabled ? 1 : 0.6 }}>
+                    <div className="indicator-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem' }}>
+                      <span className="indicator-card-title" style={{ fontWeight: 600, fontSize: '0.95rem', color: 'var(--text-primary)' }}>{ind.label}</span>
+                      
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <span className="indicator-badge" style={{ fontSize: '0.65rem', padding: '0.1rem 0.35rem', borderRadius: '4px', background: ind.enabled ? 'color-mix(in srgb, var(--color-green) 15%, transparent)' : 'color-mix(in srgb, var(--text-muted) 15%, transparent)', color: ind.enabled ? 'var(--color-green)' : 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' }}>
+                          {ind.enabled ? 'Active' : 'Disabled'}
+                        </span>
+                        
+                        <button
+                          className="btn btn-ghost btn-xs btn-icon"
+                          title="Edit Indicator"
+                          onClick={() => { setSelectedDefn(ind); setShowModal(true) }}
+                          style={{ padding: '0.15rem 0.3rem', borderRadius: '4px' }}
+                        >
+                          <Edit3 size={13} style={{ color: 'var(--color-primary)' }} />
+                        </button>
+                        
+                        <button
+                          className="btn btn-ghost btn-xs btn-icon"
+                          title={ind.enabled ? "Disable Indicator" : "Enable Indicator"}
+                          onClick={() => handleToggleStatus(ind)}
+                          style={{ padding: '0.15rem 0.3rem', borderRadius: '4px' }}
+                        >
+                          {ind.enabled ? <ToggleRight size={17} style={{ color: 'var(--color-green)' }} /> : <ToggleLeft size={17} style={{ color: 'var(--text-muted)' }} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="indicator-badge-row" style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap' }}>
+                      <span className={`indicator-badge ${ind.context_type === 'lab_test' ? 'badge-lab' : 'badge-emr'}`} style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 500, textTransform: 'uppercase', background: ind.context_type === 'lab_test' ? 'color-mix(in srgb, var(--color-primary) 15%, transparent)' : 'color-mix(in srgb, var(--color-accent) 15%, transparent)', color: ind.context_type === 'lab_test' ? 'var(--color-primary)' : 'var(--color-accent)' }}>
+                        {ind.context_type === 'lab_test' ? 'Lab Test' : 'EMR Field'}
+                      </span>
+                      <span className="indicator-badge" style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 500, textTransform: 'uppercase', background: 'color-mix(in srgb, var(--color-warning) 15%, transparent)', color: 'var(--color-warning)' }}>
+                        {ind.outcome_shape}
+                      </span>
+                      {(ind.min_age !== null || ind.max_age !== null) && (
+                        <span className="indicator-badge" style={{ fontSize: '0.7rem', padding: '0.15rem 0.4rem', borderRadius: '4px', fontWeight: 500, background: 'color-mix(in srgb, var(--color-purple) 15%, transparent)', color: 'var(--color-purple)' }}>
+                          Age: {ind.min_age ?? '0'}–{ind.max_age ?? '∞'} yrs
+                        </span>
+                      )}
+                    </div>
+
+                    <div className="indicator-ref-label" style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                      <strong>Source Reference: </strong>
+                      <span style={{ color: 'var(--text-secondary)' }}>
+                        {ind.context_type === 'lab_test'
+                          ? (testType ? `${testType.name_en} (ID: ${ind.context_ref})` : `Test Type ID ${ind.context_ref}`)
+                          : (EMR_FIELD_LABELS[ind.context_ref] || ind.context_ref)
+                        }
+                      </span>
+                    </div>
+
+                    {ind.outcome_shape === 'buttons' && (
+                      <div className="indicator-mapping-preview" style={{ fontSize: '0.75rem', borderTop: '1px dashed var(--border)', paddingTop: '0.75rem', marginTop: 'auto', color: 'var(--text-secondary)' }}>
+                        <strong>Mapped Outcomes ({ind.options?.length || 0}):</strong>
+                        <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          {ind.options?.map(opt => (
+                            <div key={opt.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'color-mix(in srgb, var(--bg-surface) 60%, transparent)', padding: '0.25rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                              <span>
+                                {opt.option_label} 
+                                {opt.option_value && <span style={{ color: 'var(--text-muted)', fontSize: '0.7rem', marginLeft: '0.3rem' }}>({opt.option_value})</span>}
+                              </span>
+                              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--color-primary)', fontWeight: 500 }}>{opt.report_event_code}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {ind.outcome_shape === 'threshold' && (
+                      <div className="indicator-mapping-preview" style={{ fontSize: '0.75rem', borderTop: '1px dashed var(--border)', paddingTop: '0.75rem', marginTop: 'auto', color: 'var(--text-secondary)' }}>
+                        <strong>Classification Thresholds ({ind.thresholds?.length || 0}):</strong>
+                        <div style={{ marginTop: '0.4rem', display: 'flex', flexDirection: 'column', gap: '0.3rem' }}>
+                          {ind.thresholds?.map(t => (
+                            <div key={t.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'color-mix(in srgb, var(--bg-surface) 60%, transparent)', padding: '0.25rem 0.5rem', borderRadius: '6px', border: '1px solid var(--border)' }}>
+                              <span>{t.label} ({t.min_value ?? '-inf'} to {t.max_value ?? '+inf'})</span>
+                              <span className="mono" style={{ fontSize: '0.7rem', color: 'var(--color-primary)', fontWeight: 500 }}>{t.report_event_code}</span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        ))
+      )}
+
+      {showModal && (
+        <IndicatorModal
+          defn={selectedDefn}
+          labTests={labTests}
+          defaultContextType={filterType === 'emr_field' ? 'emr_field' : 'lab_test'}
+          onClose={() => setShowModal(false)}
+          onSaved={() => {
+            setShowModal(false)
+            if (onRefresh) onRefresh()
+          }}
+        />
+      )}
+    </div>
+  )
+}
+
+
 // ─── Main Reports page ────────────────────────────────────────────────────────
 export default function Reports() {
   const { user } = useAuth()
@@ -479,6 +827,11 @@ export default function Reports() {
   const [diagnoses, setDiagnoses]   = useState([])
   const [stock, setStock]           = useState([])
   const [loading, setLoading]       = useState(true)
+
+  // Catalog Indicators state
+  const [indicators, setIndicators] = useState([])
+  const [labTests, setLabTests] = useState([])
+  const [indicatorsLoading, setIndicatorsLoading] = useState(false)
 
   useEffect(() => {
     setLoading(true)
@@ -512,6 +865,29 @@ export default function Reports() {
       })
       .finally(() => setLoading(false))
   }, [role, period])
+
+  const loadIndicators = useCallback(() => {
+    setIndicatorsLoading(true)
+    Promise.all([
+      adminApi.listIndicators(),
+      adminApi.labTestTypes()
+    ])
+      .then(([indRes, labRes]) => {
+        setIndicators(indRes.data || [])
+        setLabTests(labRes.data || [])
+      })
+      .catch(() => {
+        toast.error('Failed to load reportable indicator configuration')
+      })
+      .finally(() => setIndicatorsLoading(false))
+  }, [])
+
+  // Load catalog indicators on tab activation
+  useEffect(() => {
+    if (tab === 'indicators' && indicators.length === 0) {
+      loadIndicators()
+    }
+  }, [tab, indicators.length, loadIndicators])
 
   if (loading) return <div className="page-body"><div className="loading-center"><div className="spinner" /></div></div>
 
@@ -549,11 +925,13 @@ export default function Reports() {
     name_generic_en: s.name_generic_en || s.name || '',
   }))
 
+  const userRole = (role || '').toLowerCase()
   const tabs = [
     { key: 'dashboard', label: 'Dashboard',         show: true },
-    { key: 'diagnoses', label: 'Diagnoses',          show: ['admin','doctor'].includes(role) },
-    { key: 'stock',     label: 'Drug Stock',         show: ['admin','pharmacist'].includes(role) },
-    { key: 'hmis',      label: 'Government Reports', show: role === 'admin' },
+    { key: 'diagnoses', label: 'Diagnoses',          show: ['admin','doctor'].includes(userRole) },
+    { key: 'stock',     label: 'Drug Stock',         show: ['admin','pharmacist'].includes(userRole) },
+    { key: 'hmis',      label: 'Government Reports', show: ['admin', 'doctor'].includes(userRole) },
+    { key: 'indicators', label: 'Reportable Indicators', show: userRole === 'admin' },
   ].filter(t => t.show)
 
   return (
@@ -563,7 +941,7 @@ export default function Reports() {
           <h1>Reports</h1>
           <p>Analytics, statistics, and compliance reports</p>
         </div>
-        {tab !== 'hmis' && (
+        {tab !== 'hmis' && tab !== 'indicators' && (
           <div className="tabs">
             {PERIODS.map(p => (
               <button key={p} className={`tab-btn ${period === p ? 'active' : ''}`} onClick={() => setPeriod(p)}>
@@ -652,6 +1030,16 @@ export default function Reports() {
       )}
 
       {tab === 'hmis' && <GovernmentReportsTab />}
+
+      {tab === 'indicators' && (
+        <ReportableIndicatorsTab 
+          loading={indicatorsLoading} 
+          indicators={indicators} 
+          labTests={labTests} 
+          onRefresh={loadIndicators}
+        />
+      )}
+
     </div>
   )
 }

@@ -19,7 +19,7 @@ export default function PatientDetail() {
   const loadPatient = () => {
     Promise.all([
       patientsApi.get(id),
-      visitsApi.list({ patient_id: id }),
+      visitsApi.patientVisits(id, { limit: 100 }),
     ]).then(([p, v]) => {
       setPatient(p.data)
       setVisits(v.data.items ?? v.data)
@@ -321,6 +321,8 @@ function PatientEMR({ patientId }) {
           )}
         </div>
         {showNoteModal && <EMRNoteModal patientId={patientId} onClose={() => setShowNoteModal(false)} onSaved={() => { setShowNoteModal(false); load() }} />}
+        {/* Still show indicator panel even when no notes */}
+        {canCreateNote && <EMRIndicatorPanel patientId={patientId} />}
       </div>
     )
   }
@@ -335,31 +337,35 @@ function PatientEMR({ patientId }) {
           </button>
         )}
       </div>
-      <div className="card" style={{ display:'flex', flexDirection:'column', gap:'1.25rem' }}>
-      <section>
-        <h4 className="emr-section-title">Allergies</h4>
-        {allergies.length === 0 ? (
-          <p className="emr-muted">None recorded</p>
-        ) : (
-          <div style={{ display:'flex', flexWrap:'wrap', gap:'0.4rem' }}>
-            {allergies.map((a, i) => <span key={i} className="badge badge-red">{a}</span>)}
-          </div>
-        )}
-      </section>
 
-      <section>
-        <h4 className="emr-section-title">Diagnoses</h4>
-        {diagnoses.length === 0 ? (
-          <p className="emr-muted">None recorded</p>
-        ) : (
-          <ul className="emr-list">
-            {diagnoses.map((dx, i) => <li key={i}>{dxLabel(dx)}</li>)}
-          </ul>
-        )}
-      </section>
+      {/* Card 1: Core Patient Health Profile (Allergies & Diagnoses) */}
+      <div className="card" style={{ display:'flex', flexDirection:'column', gap:'1.25rem', marginBottom:'1.5rem' }}>
+        <section>
+          <h4 className="emr-section-title">Allergies</h4>
+          {allergies.length === 0 ? (
+            <p className="emr-muted">None recorded</p>
+          ) : (
+            <div style={{ display:'flex', flexWrap:'wrap', gap:'0.4rem' }}>
+              {allergies.map((a, i) => <span key={i} className="badge badge-red">{a}</span>)}
+            </div>
+          )}
+        </section>
 
-      <section>
-        <h4 className="emr-section-title">Recent Visits & Clinical Notes</h4>
+        <section>
+          <h4 className="emr-section-title">Diagnoses</h4>
+          {diagnoses.length === 0 ? (
+            <p className="emr-muted">None recorded</p>
+          ) : (
+            <ul className="emr-list">
+              {diagnoses.map((dx, i) => <li key={i}>{dxLabel(dx)}</li>)}
+            </ul>
+          )}
+        </section>
+      </div>
+
+      {/* Card 2: Recent Visits & Clinical Notes */}
+      <div className="card" style={{ marginBottom:'1.5rem' }}>
+        <h4 className="emr-section-title" style={{ marginBottom:'1rem' }}>Recent Visits & Clinical Notes</h4>
         {visits.length === 0 ? (
           <p className="emr-muted">No visits</p>
         ) : (
@@ -398,11 +404,272 @@ function PatientEMR({ patientId }) {
             </table>
           </div>
         )}
-      </section>
+      </div>
+
+      {/* Card 3: Dedicated Government Reportable Indicators Panel */}
+      {canCreateNote && <EMRIndicatorPanel patientId={patientId} />}
+
+      {showNoteModal && <EMRNoteModal patientId={patientId} onClose={() => setShowNoteModal(false)} onSaved={() => { setShowNoteModal(false); load() }} />}
+      {selectedNoteGroup && <NoteGroupViewerModal noteGroup={selectedNoteGroup} onClose={() => setSelectedNoteGroup(null)} />}
+    </>
+  )
+}
+
+
+// ─── EMR Indicator Panel (Part C) ─────────────────────────────────────────────
+function EMRIndicatorPanel({ patientId }) {
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(true)
+  // recordedCodes: set of codes already confirmed this visit (pre-loaded + newly recorded)
+  const [recordedCodes, setRecordedCodes] = useState(new Set())
+  // feedback map: code → label of the choice just recorded
+  const [feedback, setFeedback] = useState({})
+  // threshold input values per indicator id
+  const [thresholdValues, setThresholdValues] = useState({})
+  // recording state per option
+  const [recording, setRecording] = useState({})
+
+  const load = async () => {
+    try {
+      const res = await emrApi.getPatientEMRIndicators(patientId)
+      const d = res.data
+      setData(d)
+      // Seed already-recorded codes from options flagged by backend
+      const preRecorded = new Set()
+      for (const ind of (d.indicators || [])) {
+        for (const opt of (ind.options || [])) {
+          if (opt.already_recorded) preRecorded.add(opt.code)
+        }
+      }
+      setRecordedCodes(preRecorded)
+    } catch {
+      // Non-fatal — silently hide panel on error
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { load() }, [patientId])
+
+  if (loading || !data) return null
+  if (!data.open_visit_id) return null  // No open visit — panel is read-only/hidden
+  if (!data.indicators || data.indicators.length === 0) return null
+
+  const visitId = data.open_visit_id
+
+  // Group indicators by section
+  const bySection = {}
+  for (const ind of data.indicators) {
+    const sec = ind.section || 'General'
+    if (!bySection[sec]) bySection[sec] = []
+    bySection[sec].push(ind)
+  }
+
+  const handleRecord = async (indicator, code, optionLabel) => {
+    const key = `${indicator.id}:${code}`
+    if (recording[key]) return
+    setRecording(r => ({ ...r, [key]: true }))
+    try {
+      const res = await emrApi.recordIndicator({
+        visit_id: visitId,
+        indicator_definition_id: indicator.id,
+        report_event_code: code,
+        option_label: optionLabel,
+      })
+      const d = res.data
+      const resolvedCode = d.code || code
+      setRecordedCodes(prev => new Set([...prev, resolvedCode]))
+      // Also mark any related contraceptive repeat code
+      if (code !== resolvedCode) setRecordedCodes(prev => new Set([...prev, code]))
+      const wasNew = d.status === 'recorded'
+      const label = d.option_label || optionLabel
+      setFeedback(f => ({
+        ...f,
+        [indicator.id]: {
+          label,
+          code: resolvedCode,
+          isNew: wasNew,
+          isAgeException: d.is_age_exception,
+          ts: Date.now(),
+        }
+      }))
+      // Auto-clear feedback after 8 seconds
+      setTimeout(() => setFeedback(f => { const n = {...f}; delete n[indicator.id]; return n }), 8000)
+    } catch (err) {
+      toast.error(apiError(err, 'Failed to record indicator'))
+    } finally {
+      setRecording(r => { const n = {...r}; delete n[`${indicator.id}:${code}`]; return n })
+    }
+  }
+
+  const handleThreshold = async (indicator) => {
+    const raw = thresholdValues[indicator.id]
+    if (raw === undefined || raw === '') {
+      toast.error('Enter a value first')
+      return
+    }
+    const val = parseFloat(raw)
+    if (isNaN(val)) { toast.error('Invalid number'); return }
+    // Find matching threshold range
+    const match = indicator.thresholds.find(t => {
+      const aboveMin = t.min_value === null || val >= t.min_value
+      const belowMax = t.max_value === null || val < t.max_value
+      return aboveMin && belowMax
+    })
+    if (!match) { toast.error('Value does not match any configured range'); return }
+    await handleRecord(indicator, match.code, `${match.label} (${val})`)
+    setThresholdValues(v => { const n = {...v}; delete n[indicator.id]; return n })
+  }
+
+  return (
+    <div style={{ marginBottom: '1.5rem' }}>
+      {Object.entries(bySection).map(([section, indicators]) => (
+        <div key={section} style={{ marginBottom: '1rem' }}>
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: '0.5rem',
+            marginBottom: '0.6rem'
+          }}>
+            <span style={{
+              fontSize: '0.7rem', fontWeight: 700, letterSpacing: '0.08em',
+              textTransform: 'uppercase', color: 'var(--text-muted)',
+            }}>
+              {section}
+            </span>
+            <div style={{ flex: 1, height: 1, background: 'var(--border-color)' }} />
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+            {indicators.map(ind => {
+              const fb = feedback[ind.id]
+              const hasAnyRecorded = ind.options.some(o => recordedCodes.has(o.code))
+                || (fb && fb.code && recordedCodes.has(fb.code))
+
+              return (
+                <div key={ind.id} style={{
+                  background: 'var(--card-bg)',
+                  border: `1px solid ${hasAnyRecorded ? 'hsla(162,72%,45%,0.4)' : 'var(--border-color)'}`,
+                  borderRadius: 'var(--border-radius)',
+                  padding: '0.85rem 1rem',
+                  transition: 'border-color 0.3s',
+                }}>
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: '0.5rem',
+                    marginBottom: '0.55rem', flexWrap: 'wrap'
+                  }}>
+                    <span style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-primary)' }}>
+                      {ind.label}
+                    </span>
+                    {ind.is_age_exception && (
+                      <span title={`Age ${data.patient_age} is outside configured range ${ind.min_age ?? '?'}–${ind.max_age ?? '?'}`} style={{
+                        fontSize: '0.7rem', background: 'hsla(38,95%,55%,0.15)',
+                        color: 'hsl(38,95%,40%)', border: '1px solid hsla(38,95%,55%,0.3)',
+                        borderRadius: '0.3rem', padding: '0.1rem 0.4rem', fontWeight: 600,
+                      }}>
+                        ⚠ Age exception
+                      </span>
+                    )}
+                    {hasAnyRecorded && (
+                      <span style={{
+                        fontSize: '0.7rem', background: 'hsla(162,72%,45%,0.1)',
+                        color: 'hsl(162,72%,35%)', border: '1px solid hsla(162,72%,45%,0.3)',
+                        borderRadius: '0.3rem', padding: '0.1rem 0.4rem', fontWeight: 600,
+                      }}>
+                        ✓ Recorded
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Feedback message */}
+                  {fb && (
+                    <div style={{
+                      fontSize: '0.8rem', color: 'hsl(162,72%,35%)',
+                      background: 'hsla(162,72%,45%,0.08)',
+                      border: '1px solid hsla(162,72%,45%,0.25)',
+                      borderRadius: '0.3rem', padding: '0.35rem 0.6rem',
+                      marginBottom: '0.5rem',
+                      display: 'flex', alignItems: 'center', gap: '0.4rem',
+                    }}>
+                      <CheckCircle size={13} />
+                      {fb.isNew ? 'Recorded' : 'Already recorded'}: <strong>{fb.label}</strong>
+                      {fb.isAgeException && <span style={{ color: 'hsl(38,95%,40%)', marginLeft: 4 }}>(age exception flagged)</span>}
+                    </div>
+                  )}
+
+                  {/* Buttons shape */}
+                  {ind.outcome_shape === 'buttons' && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem' }}>
+                      {ind.options.map(opt => {
+                        const alreadyDone = recordedCodes.has(opt.code)
+                        const isRecording = recording[`${ind.id}:${opt.code}`]
+                        return (
+                          <button
+                            key={opt.code}
+                            onClick={() => handleRecord(ind, opt.code, opt.label)}
+                            disabled={alreadyDone || isRecording}
+                            style={{
+                              fontSize: '0.82rem',
+                              padding: '0.35rem 0.75rem',
+                              borderRadius: '0.4rem',
+                              border: alreadyDone
+                                ? '1px solid hsla(162,72%,45%,0.5)'
+                                : '1px solid var(--border-color)',
+                              background: alreadyDone
+                                ? 'hsla(162,72%,45%,0.12)'
+                                : 'var(--input-bg, var(--card-bg))',
+                              color: alreadyDone ? 'hsl(162,72%,35%)' : 'var(--text-primary)',
+                              cursor: alreadyDone ? 'default' : 'pointer',
+                              fontWeight: alreadyDone ? 600 : 400,
+                              transition: 'all 0.15s',
+                              display: 'flex', alignItems: 'center', gap: '0.3rem',
+                            }}
+                          >
+                            {alreadyDone && <Check size={12} />}
+                            {isRecording ? '…' : opt.label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  )}
+
+                  {/* Threshold shape */}
+                  {ind.outcome_shape === 'threshold' && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <input
+                        type="number"
+                        step="any"
+                        placeholder="Enter value"
+                        value={thresholdValues[ind.id] ?? ''}
+                        onChange={e => setThresholdValues(v => ({ ...v, [ind.id]: e.target.value }))}
+                        style={{
+                          width: '120px', padding: '0.35rem 0.5rem',
+                          border: '1px solid var(--border-color)',
+                          borderRadius: '0.4rem', fontSize: '0.85rem',
+                          background: 'var(--input-bg, var(--card-bg))',
+                          color: 'var(--text-primary)',
+                        }}
+                      />
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleThreshold(ind)}
+                        disabled={!thresholdValues[ind.id]}
+                      >
+                        Record
+                      </button>
+                      {ind.thresholds.length > 0 && (
+                        <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                          Ranges: {ind.thresholds.map(t =>
+                            `${t.label} (${t.min_value ?? '–∞'}–${t.max_value ?? '∞'})`
+                          ).join(', ')}
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      ))}
     </div>
-    {showNoteModal && <EMRNoteModal patientId={patientId} onClose={() => setShowNoteModal(false)} onSaved={() => { setShowNoteModal(false); load() }} />}
-    {selectedNoteGroup && <NoteGroupViewerModal noteGroup={selectedNoteGroup} onClose={() => setSelectedNoteGroup(null)} />}
-  </>
   )
 }
 
